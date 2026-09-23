@@ -1,7 +1,7 @@
 import cv2
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, scrolledtext
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw, ImageFont
 import pytesseract
 import os
 import numpy as np
@@ -15,8 +15,8 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 class AppScanner:
     def __init__(self, root):
         self.root = root
-        self.root.title("Scanner OCR - v1.6.0 (SQLite History & Regex)")
-        self.root.geometry("800x900") 
+        self.root.title("Scanner OCR - v1.7.1 (Full Image PDF)")
+        self.root.geometry("800x950") 
         
         self.cap = cv2.VideoCapture(0)
         self.pasta_destino = tk.StringVar()
@@ -39,16 +39,17 @@ class AppScanner:
         self.video_label = tk.Label(root)
         self.video_label.pack(pady=5)
         
-        # 2. Pasta de Destino Fixa e Botão de Histórico
+        # 2. Pasta de Destino e Botões de Acesso
         opcoes_frame = tk.Frame(root)
         opcoes_frame.pack(pady=5, fill=tk.X, padx=20)
         
         tk.Label(opcoes_frame, text="Pasta:", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
-        tk.Entry(opcoes_frame, textvariable=self.pasta_destino, state='readonly', width=32).pack(side=tk.LEFT, padx=5)
+        tk.Entry(opcoes_frame, textvariable=self.pasta_destino, state='readonly', width=30).pack(side=tk.LEFT, padx=5)
         tk.Button(opcoes_frame, text="Procurar", command=self.escolher_pasta).pack(side=tk.LEFT, padx=2)
-        tk.Button(opcoes_frame, text="📊 Ver Histórico", command=self.abrir_janela_historico, bg="lightyellow", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=10)
+        tk.Button(opcoes_frame, text="📊 Histórico", command=self.abrir_janela_historico, bg="lightyellow", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=5)
+        tk.Button(opcoes_frame, text="📄 Gerar PDF (Imagem Cheia)", command=self.gerar_pdf_manual, bg="lightgreen", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=2)
         
-        # 3. Painel de Ação
+        # 3. Painel de Ação Principal
         btn_frame = tk.Frame(root)
         btn_frame.pack(pady=5)
         
@@ -67,11 +68,10 @@ class AppScanner:
         self.log_text = scrolledtext.ScrolledText(root, height=5, bg="black", fg="lightgreen", font=("Consolas", 9))
         self.log_text.pack(pady=2, padx=20, fill=tk.BOTH, expand=True)
         
-        self.log("Sistema v1.6.0 iniciado com SQLite e Regex. Selecione a pasta de destino.")
+        self.log("Sistema v1.7.1 iniciado. Selecione a pasta de destino para começar.")
         self.atualizar_frame()
 
     def inicializar_banco(self):
-        """Cria o banco de dados e a tabela de histórico se não existirem"""
         self.conexao = sqlite3.connect("scanner_historico.db")
         self.cursor = self.conexao.cursor()
         self.cursor.execute("""
@@ -92,7 +92,7 @@ class AppScanner:
         self.root.update()        
 
     def escolher_pasta(self):
-        pasta = filedialog.askdirectory(title="Selecione a pasta para exportação automática")
+        pasta = filedialog.askdirectory(title="Selecione a pasta para exportação")
         if pasta:
             self.pasta_destino.set(pasta)
             self.log(f"Pasta configurada: {pasta}")
@@ -239,8 +239,20 @@ class AppScanner:
         else:
             self.root.after(20, self.executar_animacao)
 
+    def criar_arquivo_pdf(self, caminho_pdf, imagem_cv):
+        """Gera um PDF nativo cobrindo toda a página com a imagem escaneada"""
+        img_rgb = cv2.cvtColor(imagem_cv, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(img_rgb)
+        
+        # Converte a imagem para o modo RGB puro (necessário para salvar em PDF sem transparências)
+        if pil_img.mode != "RGB":
+            pil_img = pil_img.convert("RGB")
+            
+        # Salva a imagem esticada/ajustada preenchendo a página inteira do PDF
+        pil_img.save(caminho_pdf, "PDF", resolution=150.0)
+
     def realizar_ocr_e_salvar_bd(self):
-        self.log("Lendo OCR e registrando no Banco de Dados...")
+        self.log("Lendo OCR, registrando no Banco de Dados e gerando PDF...")
         self.root.update()
         
         cinza = cv2.cvtColor(self.frame_escaneado, cv2.COLOR_BGR2GRAY)
@@ -253,25 +265,29 @@ class AppScanner:
             self.texto_extraido.delete(1.0, tk.END)
             self.texto_extraido.insert(tk.END, texto_formatado)
             
-            # Salva arquivos físicos
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             nome_base = f"scan_{timestamp}"
-            caminho_txt = os.path.join(self.pasta_destino.get(), f"{nome_base}.txt")
-            caminho_img = os.path.join(self.pasta_destino.get(), f"{nome_base}.png")
+            pasta = self.pasta_destino.get()
             
+            caminho_txt = os.path.join(pasta, f"{nome_base}.txt")
+            caminho_img = os.path.join(pasta, f"{nome_base}.png")
+            caminho_pdf = os.path.join(pasta, f"{nome_base}.pdf")
+            
+            # Salva arquivos físicos (TXT, PNG e o PDF com imagem em tela cheia)
             with open(caminho_txt, 'w', encoding='utf-8') as f:
                 f.write(texto_formatado)
             cv2.imwrite(caminho_img, self.frame_escaneado)
+            self.criar_arquivo_pdf(caminho_pdf, self.frame_escaneado)
             
             # Salva no Banco de Dados SQLite
             data_hora_atual = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
             self.cursor.execute(
                 "INSERT INTO historico (data_hora, caminho_arquivo, resumo_dados, texto_completo) VALUES (?, ?, ?, ?)",
-                (data_hora_atual, caminho_txt, resumo_regex, texto_formatado)
+                (data_hora_atual, caminho_pdf, resumo_regex, texto_formatado)
             )
             self.conexao.commit()
             
-            self.log(f"💾 Salvo no disco e registrado no SQLite com sucesso!")
+            self.log(f"💾 Sucesso! TXT, PNG e PDF gerados e salvos.")
             self.log("Retornando à câmera em 2 segundos...")
             self.root.after(2000, self.voltar_camera)
             
@@ -279,33 +295,50 @@ class AppScanner:
             self.log(f"ERRO: {e}")
             self.voltar_camera()
 
+    def gerar_pdf_manual(self):
+        """Permite gerar um PDF manualmente baseado na última imagem escaneada"""
+        if self.frame_escaneado is None:
+            return messagebox.showwarning("Aviso", "Nenhuma imagem escaneada recentemente na memória.")
+            
+        pasta = self.pasta_destino.get()
+        if not pasta:
+            pasta = filedialog.askdirectory(title="Selecione onde salvar o PDF")
+            if not pasta: return
+            self.pasta_destino.set(pasta)
+            
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        caminho_pdf = os.path.join(pasta, f"manual_scan_{timestamp}.pdf")
+        
+        try:
+            self.criar_arquivo_pdf(caminho_pdf, self.frame_escaneado)
+            self.log(f"📄 PDF manual gerado em: {caminho_pdf}")
+            messagebox.showinfo("Sucesso", f"PDF gerado com sucesso!\n{caminho_pdf}")
+        except Exception as e:
+            messagebox.showerror("Erro", f"Falha ao gerar PDF: {e}")
+
     def abrir_janela_historico(self):
-        """Abre uma nova janela moderna para consultar o histórico do SQLite"""
         janela_hist = tk.Toplevel(self.root)
         janela_hist.title("Histórico de Scans (SQLite)")
         janela_hist.geometry("750x450")
         
         tk.Label(janela_hist, text="Registros Salvos no Banco de Dados Local", font=("Arial", 12, "bold")).pack(pady=10)
         
-        # Tabela Treeview
-        colunas = ("ID", "Data/Hora", "Resumo Regex", "Arquivo")
+        colunas = ("ID", "Data/Hora", "Resumo Regex", "Arquivo PDF")
         tabela = ttk.Treeview(janela_hist, columns=colunas, show="headings", height=15)
         
         tabela.heading("ID", text="ID")
         tabela.heading("Data/Hora", text="Data/Hora")
         tabela.heading("Resumo Regex", text="Resumo Regex")
-        tabela.heading("Arquivo", text="Caminho do Arquivo")
+        tabela.heading("Arquivo PDF", text="Caminho do PDF")
         
         tabela.column("ID", width=40, anchor=tk.CENTER)
         tabela.column("Data/Hora", width=130, anchor=tk.CENTER)
-        tabela.column("Resumo Regex", width=280, anchor=tk.W)
-        tabela.column("Arquivo", width=250, anchor=tk.W)
+        tabela.column("Resumo Regex", width=250, anchor=tk.W)
+        tabela.column("Arquivo PDF", width=280, anchor=tk.W)
         tabela.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        # Carrega dados do SQLite
         self.cursor.execute("SELECT id, data_hora, resumo_dados, caminho_arquivo FROM historico ORDER BY id DESC")
-        registros = self.cursor.fetchall()
-        for reg in registros:
+        for reg in self.cursor.fetchall():
             tabela.insert("", tk.END, values=reg)
             
         tk.Button(janela_hist, text="Fechar", command=janela_hist.destroy, width=15, bg="lightgray").pack(pady=10)
