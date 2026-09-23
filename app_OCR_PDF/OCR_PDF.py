@@ -14,21 +14,17 @@ class AppScanner:
     def __init__(self, root):
         self.root = root
         self.root.title("Scanner OCR - V1")
-        
-        # Aumentamos a janela para acomodar os novos elementos
-        self.root.geometry("680x850") 
+        self.root.geometry("700x850") 
         
         self.cap = cv2.VideoCapture(0)
         self.frame_escaneado = None 
-        
-        # Variável para armazenar a pasta de salvamento automático
         self.pasta_destino = tk.StringVar()
         
-        # 1. Área de exibição do vídeo
+        # 1. Área do vídeo 
         self.video_label = tk.Label(root)
         self.video_label.pack(pady=5)
         
-        # 2. Frame de Opções (Checkbox + Pasta de Destino)
+        # 2. Frame de Opções 
         opcoes_frame = tk.Frame(root)
         opcoes_frame.pack(pady=5, fill=tk.X, padx=20)
         
@@ -46,39 +42,41 @@ class AppScanner:
         tk.Entry(dir_frame, textvariable=self.pasta_destino, state='readonly', width=45).pack(side=tk.LEFT, padx=5)
         tk.Button(dir_frame, text="Procurar Pasta", command=self.escolher_pasta).pack(side=tk.LEFT)
         
-        # 3. Painel de botões principais
+        # 3. Painel de botões
         btn_frame = tk.Frame(root)
         btn_frame.pack(pady=5)
         
         tk.Button(btn_frame, text="1. Escanear e Ler", command=self.escanear, bg="lightblue", height=2).pack(side=tk.LEFT, padx=5)
-        # Unificamos a chamada de exportação usando lambda para simplificar o código
         tk.Button(btn_frame, text="2. Exportar TXT", command=lambda: self.exportar("txt"), height=2).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="3. Exportar DOCX", command=lambda: self.exportar("docx"), height=2).pack(side=tk.LEFT, padx=5)
         
-        # 4. Caixa de texto para o resultado do OCR
+        # 4. Caixa de texto para OCR
         tk.Label(root, text="Texto Extraído:").pack()
-        self.texto_extraido = tk.Text(root, height=10, width=65)
+        self.texto_extraido = tk.Text(root, height=8, width=65)
         self.texto_extraido.pack(pady=5)
 
-        # 5. Caixa de texto para o Log Visível
+        # 5. Terminal de Logs (Com correção de expand=True)
         tk.Label(root, text="Terminal de Logs:").pack()
-        self.log_text = scrolledtext.ScrolledText(root, height=7, width=80, bg="black", fg="lightgreen", font=("Consolas", 9))
-        self.log_text.pack(pady=5)
+        self.log_text = scrolledtext.ScrolledText(root, height=7, bg="black", fg="lightgreen", font=("Consolas", 10))
+        self.log_text.pack(pady=5, padx=20, fill=tk.BOTH, expand=True)
         
         self.log("Aplicativo iniciado. Aguardando câmera...")
         self.atualizar_frame()
 
     def log(self, mensagem):
-        """Escreve na caixa de log preta e atualiza a interface em tempo real"""
+        """Escreve no log e desenha a informação imediatamente na tela (evita congelamento)"""
         hora = datetime.now().strftime("%H:%M:%S")
         self.log_text.insert(tk.END, f"[{hora}] {mensagem}\n")
-        self.log_text.see(tk.END) # Rola automaticamente para a última linha
-        self.root.update()        # Impede que a tela congele durante o processamento
+        self.log_text.see(tk.END) 
+        self.root.update()        
         
     def atualizar_frame(self):
         ret, frame = self.cap.read()
         if ret:
-            cv_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # CORREÇÃO: Reduz o feed de vídeo na tela para não "empurrar" o log para fora da janela
+            frame_visual = cv2.resize(frame, (480, 360))
+            cv_img = cv2.cvtColor(frame_visual, cv2.COLOR_BGR2RGB)
+            
             img = Image.fromarray(cv_img)
             imgtk = ImageTk.PhotoImage(image=img)
             
@@ -91,62 +89,49 @@ class AppScanner:
         pasta = filedialog.askdirectory(title="Selecione a pasta para exportação")
         if pasta:
             self.pasta_destino.set(pasta)
-            self.log(f"Pasta configurada: {pasta}")
+            self.log(f"Pasta configurada para Auto-Save: {pasta}")
 
     def escanear(self):
-        self.log("Iniciando captura...")
+        self.log("Iniciando captura de imagem...")
         ret, frame = self.cap.read()
         if not ret:
-            self.log("ERRO: Falha ao ler o hardware da câmera.")
-            messagebox.showerror("Erro", "Falha ao capturar imagem da webcam.")
-            return
+            self.log("ERRO: Falha ao ler a câmera.")
+            return messagebox.showerror("Erro", "Falha na webcam.")
             
+        # O frame_escaneado mantém a alta resolução original (sem o resize visual)
         self.frame_escaneado = frame.copy()
-        self.log("Imagem capturada com sucesso e salva na memória.")
         
         cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         _, binarizada = cv2.threshold(cinza, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-        self.log("Filtro de contraste aplicado.")
+        self.log("Filtro de contraste aplicado. Aguarde o OCR...")
         
         try:
-            self.log("Enviando imagem para o Tesseract OCR... aguarde.")
             texto = pytesseract.image_to_string(binarizada, lang='por')
+            self.log("📝 Escaneado!") 
             
-            self.log(f"Leitura concluída! {len(texto)} caracteres extraídos.")
             self.texto_extraido.delete(1.0, tk.END)
             self.texto_extraido.insert(tk.END, texto)
         except Exception as e:
-            self.log(f"ERRO CRÍTICO NO OCR: {e}")
-            messagebox.showerror("Erro OCR", f"Detalhes no terminal.\nErro: {e}")
+            self.log(f"ERRO OCR: {e}")
 
     def exportar(self, formato):
-        """Função unificada para exportar texto e imagem automaticamente ou manualmente"""
         texto = self.texto_extraido.get(1.0, tk.END).strip()
         if not texto:
-            self.log("Exportação abortada: caixa de texto vazia.")
+            self.log("Exportação abortada: caixa vazia.")
             return messagebox.showwarning("Aviso", "A caixa de texto está vazia.")
             
         pasta_padrao = self.pasta_destino.get()
-        nome_arquivo = f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        nome = f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         if pasta_padrao:
-            # Modo Automático: Salva direto sem perguntar
-            caminho = os.path.join(pasta_padrao, f"{nome_arquivo}.{formato}")
-            self.log(f"Modo Automático: Exportando para {caminho}")
+            caminho = os.path.join(pasta_padrao, f"{nome}.{formato}")
         else:
-            # Modo Manual: Pergunta onde salvar
-            tipos = [("Arquivo de Texto", "*.txt")] if formato == "txt" else [("Documento Word", "*.docx")]
-            caminho = filedialog.asksaveasfilename(
-                initialfile=nome_arquivo, 
-                defaultextension=f".{formato}", 
-                filetypes=tipos
-            )
+            tipos = [("Arquivo TXT", "*.txt")] if formato == "txt" else [("Documento DOCX", "*.docx")]
+            caminho = filedialog.asksaveasfilename(initialfile=nome, defaultextension=f".{formato}", filetypes=tipos)
             if not caminho:
-                self.log("Exportação cancelada pelo usuário.")
                 return
-            self.log(f"Exportando para {caminho}")
 
-        # Exporta o texto de acordo com o formato
+        # Exportação do texto
         if formato == 'txt':
             with open(caminho, 'w', encoding='utf-8') as f:
                 f.write(texto)
@@ -155,15 +140,16 @@ class AppScanner:
             doc.add_paragraph(texto)
             doc.save(caminho)
             
-        # Verifica se precisa salvar a imagem vinculada
+        # Exportação da imagem associada
         salvou_foto = False
         if self.salvar_foto_var.get() and self.frame_escaneado is not None:
             caminho_img = os.path.splitext(caminho)[0] + '.png'
             cv2.imwrite(caminho_img, self.frame_escaneado)
-            self.log(f"Imagem da câmera salva em: {caminho_img}")
+            self.log("📸 Print tirado com sucesso!")
             salvou_foto = True
             
-        self.log(f"Exportação finalizada com sucesso.")
+        self.log(f"📄 {formato.upper()} exportado.")
+        
         msg = "Documento e foto salvos!" if salvou_foto else "Documento salvo com sucesso!"
         messagebox.showinfo("Sucesso", f"{msg}\nLocal: {caminho}")
 
