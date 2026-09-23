@@ -6,27 +6,40 @@ import pytesseract
 from docx import Document
 import os
 import numpy as np
+import math
 from datetime import datetime
 
-# Aponte para o executável do Tesseract no seu sistema
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 class AppScanner:
     def __init__(self, root):
         self.root = root
-        self.root.title("Scanner OCR - V1 (Auto-Crop Robusto)")
-        self.root.geometry("700x850") 
+        self.root.title("Scanner OCR - V1 (Crop Interativo)")
+        self.root.geometry("750x900") 
         
         self.cap = cv2.VideoCapture(0)
-        self.frame_escaneado = None 
         self.pasta_destino = tk.StringVar()
         
+        # Estados da aplicação
         self.documento_atual = None
-        self.efeito_piscando = False
+        self.frame_escaneado = None 
+        self.frame_alta_resolucao = None
         
-        # 1. Área do vídeo 
-        self.video_label = tk.Label(root)
+        # Variáveis para o Modo Ajuste
+        self.modo_ajuste = False
+        self.frame_congelado = None
+        self.pontos_visuais = None
+        self.indice_arrastado = None
+        self.fator_escala_x = 1.0
+        self.fator_escala_y = 1.0
+        
+        # 1. Área do vídeo com eventos de Mouse vinculados
+        self.video_label = tk.Label(root, cursor="crosshair")
         self.video_label.pack(pady=5)
+        
+        self.video_label.bind("<Button-1>", self.iniciar_arraste)
+        self.video_label.bind("<B1-Motion>", self.arrastar)
+        self.video_label.bind("<ButtonRelease-1>", self.parar_arraste)
         
         # 2. Frame de Opções 
         opcoes_frame = tk.Frame(root)
@@ -44,24 +57,25 @@ class AppScanner:
         tk.Entry(dir_frame, textvariable=self.pasta_destino, state='readonly', width=45).pack(side=tk.LEFT, padx=5)
         tk.Button(dir_frame, text="Procurar Pasta", command=self.escolher_pasta).pack(side=tk.LEFT)
         
-        # 3. Painel de botões principais
+        # 3. Painel de botões principais reformulado
         btn_frame = tk.Frame(root)
         btn_frame.pack(pady=5)
         
-        tk.Button(btn_frame, text="1. Escanear e Ler", command=self.escanear, bg="lightblue", height=2).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="2. Exportar TXT", command=lambda: self.exportar("txt"), height=2).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="3. Exportar DOCX", command=lambda: self.exportar("docx"), height=2).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="1. Congelar & Ajustar", command=self.ativar_ajuste, bg="lightyellow", height=2).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="2. Recortar & Ler (OCR)", command=self.escanear, bg="lightblue", height=2).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="3. Exportar TXT", command=lambda: self.exportar("txt"), height=2).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="4. Exportar DOCX", command=lambda: self.exportar("docx"), height=2).pack(side=tk.LEFT, padx=5)
         
         # 4. Caixa de texto e Logs
         tk.Label(root, text="Texto Extraído:").pack()
-        self.texto_extraido = tk.Text(root, height=8, width=65)
+        self.texto_extraido = tk.Text(root, height=8, width=70)
         self.texto_extraido.pack(pady=5)
 
         tk.Label(root, text="Terminal de Logs:").pack()
         self.log_text = scrolledtext.ScrolledText(root, height=7, bg="black", fg="lightgreen", font=("Consolas", 10))
         self.log_text.pack(pady=5, padx=20, fill=tk.BOTH, expand=True)
         
-        self.log("Aplicativo iniciado. Aguardando câmera...")
+        self.log("Sistema iniciado. Enquadre o documento e clique em 'Congelar & Ajustar'.")
         self.atualizar_frame()
 
     def log(self, mensagem):
@@ -81,73 +95,107 @@ class AppScanner:
         nova_ordem[3] = pontos[np.argmax(diff)]
         return nova_ordem
 
-    def desenhar_vs(self, frame, pts):
-        pts = pts.reshape(4, 2)
-        for i in range(4):
-            p_atual = pts[i]
-            p_ant = pts[(i - 1) % 4]
-            p_prox = pts[(i + 1) % 4]
-            v1 = p_atual + 0.15 * (p_ant - p_atual)
-            v2 = p_atual + 0.15 * (p_prox - p_atual)
-            cv2.line(frame, tuple(p_atual.astype(int)), tuple(v1.astype(int)), (0, 255, 0), 4)
-            cv2.line(frame, tuple(p_atual.astype(int)), tuple(v2.astype(int)), (0, 255, 0), 4)
+    # --- LÓGICA DE ARRASTE DO MOUSE ---
+    def iniciar_arraste(self, event):
+        if not self.modo_ajuste or self.pontos_visuais is None:
+            return
+            
+        # Verifica qual vértice está mais próximo do clique do mouse
+        raio_clique = 30 
+        for i, ponto in enumerate(self.pontos_visuais):
+            distancia = math.hypot(event.x - ponto[0], event.y - ponto[1])
+            if distancia < raio_clique:
+                self.indice_arrastado = i
+                break
 
-    def atualizar_frame(self):
+    def arrastar(self, event):
+        if self.modo_ajuste and self.indice_arrastado is not None:
+            # Limita o arraste para não sair da tela de 480x360
+            x = max(0, min(event.x, 480))
+            y = max(0, min(event.y, 360))
+            self.pontos_visuais[self.indice_arrastado] = [x, y]
+            self.renderizar_frame_ajuste()
+
+    def parar_arraste(self, event):
+        self.indice_arrastado = None
+
+    def ativar_ajuste(self):
+        if self.documento_atual is None:
+            self.log("Nenhum papel detectado para ajustar. Tente novamente.")
+            return messagebox.showwarning("Aviso", "Aguarde a detecção verde aparecer antes de ajustar.")
+            
+        self.modo_ajuste = True
         ret, frame = self.cap.read()
         if ret:
-            # Pré-processamento com filtro de ruído e fechamento morfológico
-            cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            desfoque = cv2.GaussianBlur(cinza, (5, 5), 0)
-            bordas = cv2.Canny(desfoque, 30, 150)
+            self.frame_alta_resolucao = frame.copy()
+            self.frame_congelado = cv2.resize(frame, (480, 360))
             
-            kernel = np.ones((5, 5), np.uint8)
-            bordas = cv2.dilate(bordas, kernel, iterations=1)
-            bordas = cv2.erode(bordas, kernel, iterations=1)
+            h_orig, w_orig = frame.shape[:2]
+            self.fator_escala_x = w_orig / 480
+            self.fator_escala_y = h_orig / 360
             
-            contornos, _ = cv2.findContours(bordas, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-            contornos = sorted(contornos, key=cv2.contourArea, reverse=True)[:5]
-            
-            self.documento_atual = None
-            
-            for contorno in contornos:
-                area = cv2.contourArea(contorno)
+            # Mapeia os pontos originais para o tamanho reduzido da interface
+            pontos = self.ordenar_pontos(self.documento_atual)
+            self.pontos_visuais = []
+            for p in pontos:
+                self.pontos_visuais.append([int(p[0] / self.fator_escala_x), int(p[1] / self.fator_escala_y)])
                 
-                # Filtro de área para evitar reconhecimento de objetos pequenos
-                if area > 15000: 
-                    perimetro = cv2.arcLength(contorno, True)
-                    # Tolerância de 4% para imperfeições no papel
-                    aproximacao = cv2.approxPolyDP(contorno, 0.04 * perimetro, True)
-                    
-                    if len(aproximacao) == 4:
-                        self.documento_atual = aproximacao
-                        
-                        mascara = np.zeros(frame.shape[:2], dtype=np.uint8)
-                        cv2.fillPoly(mascara, [aproximacao], 255)
-                        
-                        fundo_escuro = cv2.addWeighted(frame, 0.3, np.zeros_like(frame), 0.7, 0)
-                        frame = np.where(mascara[:, :, None] == 255, frame, fundo_escuro)
-                        
-                        if self.efeito_piscando:
-                            branco = np.ones_like(frame) * 255
-                            frame = np.where(mascara[:, :, None] == 255, branco, frame)
-                        else:
-                            cv2.drawContours(frame, [aproximacao], -1, (0, 255, 0), 1)
-                            self.desenhar_vs(frame, aproximacao)
-                        break
+            self.log("⏱️ Imagem congelada! Arraste as bolinhas azuis para ajustar os cantos.")
+            self.renderizar_frame_ajuste()
 
-            # Redimensionamento para o display nativo da GUI
-            frame_visual = cv2.resize(frame, (480, 360))
-            cv_img = cv2.cvtColor(frame_visual, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(cv_img)
-            imgtk = ImageTk.PhotoImage(image=img)
-            
-            self.video_label.imgtk = imgtk
-            self.video_label.configure(image=imgtk)
-            
-        self.root.after(15, self.atualizar_frame)
+    def renderizar_frame_ajuste(self):
+        """Desenha a imagem congelada com os controladores manuais de vértices"""
+        frame_desenho = self.frame_congelado.copy()
         
-    def parar_flash(self):
-        self.efeito_piscando = False
+        pts = np.array(self.pontos_visuais, np.int32).reshape((-1, 1, 2))
+        cv2.polylines(frame_desenho, [pts], True, (255, 0, 0), 2)
+        
+        for p in self.pontos_visuais:
+            cv2.circle(frame_desenho, tuple(p), 8, (255, 0, 0), -1)
+            cv2.circle(frame_desenho, tuple(p), 12, (0, 255, 255), 2)
+            
+        cv_img = cv2.cvtColor(frame_desenho, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(cv_img)
+        imgtk = ImageTk.PhotoImage(image=img)
+        self.video_label.imgtk = imgtk
+        self.video_label.configure(image=imgtk)
+
+    def atualizar_frame(self):
+        if not self.modo_ajuste:
+            ret, frame = self.cap.read()
+            if ret:
+                cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                desfoque = cv2.GaussianBlur(cinza, (5, 5), 0)
+                bordas = cv2.Canny(desfoque, 30, 150)
+                
+                kernel = np.ones((5, 5), np.uint8)
+                bordas = cv2.dilate(bordas, kernel, iterations=1)
+                bordas = cv2.erode(bordas, kernel, iterations=1)
+                
+                contornos, _ = cv2.findContours(bordas, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+                contornos = sorted(contornos, key=cv2.contourArea, reverse=True)[:5]
+                
+                self.documento_atual = None
+                
+                for contorno in contornos:
+                    if cv2.contourArea(contorno) > 15000: 
+                        perimetro = cv2.arcLength(contorno, True)
+                        aproximacao = cv2.approxPolyDP(contorno, 0.04 * perimetro, True)
+                        
+                        if len(aproximacao) == 4:
+                            self.documento_atual = aproximacao
+                            cv2.drawContours(frame, [aproximacao], -1, (0, 255, 0), 2)
+                            break
+
+                frame_visual = cv2.resize(frame, (480, 360))
+                cv_img = cv2.cvtColor(frame_visual, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(cv_img)
+                imgtk = ImageTk.PhotoImage(image=img)
+                
+                self.video_label.imgtk = imgtk
+                self.video_label.configure(image=imgtk)
+                
+        self.root.after(15, self.atualizar_frame)
 
     def escolher_pasta(self):
         pasta = filedialog.askdirectory(title="Selecione a pasta para exportação")
@@ -156,19 +204,18 @@ class AppScanner:
             self.log(f"Auto-Save ativado: {pasta}")
 
     def escanear(self):
-        if self.documento_atual is None:
-            self.log("ERRO: Nenhum documento detectado. Enquadre a folha.")
-            return messagebox.showwarning("Aviso", "Enquadre o documento antes de escanear.")
+        if not self.modo_ajuste or self.pontos_visuais is None:
+            self.log("ERRO: É necessário congelar a imagem primeiro.")
+            return messagebox.showwarning("Aviso", "Clique em 'Congelar & Ajustar' antes de recortar.")
             
-        self.log("Iniciando escaneamento inteligente...")
-        ret, frame_original = self.cap.read()
+        self.log("Iniciando recorte com pontos manuais...")
         
-        # Pisca a tela (feedback visual)
-        self.efeito_piscando = True
-        self.root.after(150, self.parar_flash)
-        
-        # Correção de perspectiva (Auto-Crop e planificação do papel)
-        pontos_doc = self.ordenar_pontos(self.documento_atual)
+        # Mapeia os pontos da interface de volta para a alta resolução do sensor
+        pontos_reais = []
+        for p in self.pontos_visuais:
+            pontos_reais.append([p[0] * self.fator_escala_x, p[1] * self.fator_escala_y])
+            
+        pontos_doc = np.array(pontos_reais, dtype="float32")
         (tl, tr, br, bl) = pontos_doc
         
         larguraA = np.linalg.norm(br - bl)
@@ -187,21 +234,25 @@ class AppScanner:
         ], dtype="float32")
         
         matriz = cv2.getPerspectiveTransform(pontos_doc, pontos_destino)
-        documento_recortado = cv2.warpPerspective(frame_original, matriz, (max_largura, max_altura))
+        documento_recortado = cv2.warpPerspective(self.frame_alta_resolucao, matriz, (max_largura, max_altura))
         self.frame_escaneado = documento_recortado.copy()
         
-        # OCR
         cinza = cv2.cvtColor(documento_recortado, cv2.COLOR_BGR2GRAY)
         _, binarizada = cv2.threshold(cinza, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         self.log("Filtro aplicado. Extraindo texto...")
         
         try:
             texto = pytesseract.image_to_string(binarizada, lang='por')
-            self.log("📝 Escaneado!") 
+            self.log("📝 Escaneado! Câmera liberada.") 
             self.texto_extraido.delete(1.0, tk.END)
             self.texto_extraido.insert(tk.END, texto)
+            
+            # Retorna a câmera para o feed ao vivo
+            self.modo_ajuste = False
+            self.documento_atual = None
         except Exception as e:
             self.log(f"ERRO OCR: {e}")
+            self.modo_ajuste = False
 
     def exportar(self, formato):
         texto = self.texto_extraido.get(1.0, tk.END).strip()
@@ -219,7 +270,6 @@ class AppScanner:
             if not caminho:
                 return
 
-        # Exportação condicional
         if formato == 'txt':
             with open(caminho, 'w', encoding='utf-8') as f:
                 f.write(texto)
