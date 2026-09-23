@@ -1,7 +1,7 @@
 import cv2
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, scrolledtext
-from PIL import Image, ImageTk, ImageDraw, ImageFont
+from PIL import Image, ImageTk
 import pytesseract
 import os
 import numpy as np
@@ -15,7 +15,7 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 class AppScanner:
     def __init__(self, root):
         self.root = root
-        self.root.title("Scanner OCR - v1.7.1 (Full Image PDF)")
+        self.root.title("Scanner OCR - v1.7.2 (Full Image PDF)")
         self.root.geometry("800x950") 
         
         self.cap = cv2.VideoCapture(0)
@@ -47,7 +47,7 @@ class AppScanner:
         tk.Entry(opcoes_frame, textvariable=self.pasta_destino, state='readonly', width=30).pack(side=tk.LEFT, padx=5)
         tk.Button(opcoes_frame, text="Procurar", command=self.escolher_pasta).pack(side=tk.LEFT, padx=2)
         tk.Button(opcoes_frame, text="📊 Histórico", command=self.abrir_janela_historico, bg="lightyellow", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=5)
-        tk.Button(opcoes_frame, text="📄 Gerar PDF (Imagem Cheia)", command=self.gerar_pdf_manual, bg="lightgreen", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=2)
+        tk.Button(opcoes_frame, text="📄 Gerar PDF (Full Image)", command=self.gerar_pdf_manual, bg="lightgreen", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=2)
         
         # 3. Painel de Ação Principal
         btn_frame = tk.Frame(root)
@@ -68,7 +68,7 @@ class AppScanner:
         self.log_text = scrolledtext.ScrolledText(root, height=5, bg="black", fg="lightgreen", font=("Consolas", 9))
         self.log_text.pack(pady=2, padx=20, fill=tk.BOTH, expand=True)
         
-        self.log("Sistema v1.7.1 iniciado. Selecione a pasta de destino para começar.")
+        self.log("Sistema v1.7.2 iniciado. Selecione a pasta de destino para começar.")
         self.atualizar_frame()
 
     def inicializar_banco(self):
@@ -240,15 +240,13 @@ class AppScanner:
             self.root.after(20, self.executar_animacao)
 
     def criar_arquivo_pdf(self, caminho_pdf, imagem_cv):
-        """Gera um PDF nativo cobrindo toda a página com a imagem escaneada"""
+        """Gera um PDF nativo cobrindo a página inteira com a imagem recortada"""
         img_rgb = cv2.cvtColor(imagem_cv, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(img_rgb)
         
-        # Converte a imagem para o modo RGB puro (necessário para salvar em PDF sem transparências)
         if pil_img.mode != "RGB":
             pil_img = pil_img.convert("RGB")
             
-        # Salva a imagem esticada/ajustada preenchendo a página inteira do PDF
         pil_img.save(caminho_pdf, "PDF", resolution=150.0)
 
     def realizar_ocr_e_salvar_bd(self):
@@ -273,7 +271,7 @@ class AppScanner:
             caminho_img = os.path.join(pasta, f"{nome_base}.png")
             caminho_pdf = os.path.join(pasta, f"{nome_base}.pdf")
             
-            # Salva arquivos físicos (TXT, PNG e o PDF com imagem em tela cheia)
+            # Salva arquivos físicos (TXT, PNG e PDF preenchido com a imagem)
             with open(caminho_txt, 'w', encoding='utf-8') as f:
                 f.write(texto_formatado)
             cv2.imwrite(caminho_img, self.frame_escaneado)
@@ -296,7 +294,7 @@ class AppScanner:
             self.voltar_camera()
 
     def gerar_pdf_manual(self):
-        """Permite gerar um PDF manualmente baseado na última imagem escaneada"""
+        """Gera um PDF manual com a imagem em tela cheia"""
         if self.frame_escaneado is None:
             return messagebox.showwarning("Aviso", "Nenhuma imagem escaneada recentemente na memória.")
             
