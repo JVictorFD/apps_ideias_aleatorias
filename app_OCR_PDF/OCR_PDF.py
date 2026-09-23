@@ -5,6 +5,7 @@ from PIL import Image, ImageTk
 import pytesseract
 import os
 import numpy as np
+import re
 from datetime import datetime
 
 # Aponte para o executável do Tesseract no seu sistema
@@ -13,8 +14,8 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 class AppScanner:
     def __init__(self, root):
         self.root = root
-        self.root.title("Scanner OCR - v1.4.1 (Continuous Scan Fix)")
-        self.root.geometry("700x850") 
+        self.root.title("Scanner OCR - v1.5.0 (Smart Regex Extractor)")
+        self.root.geometry("700x880") 
         
         self.cap = cv2.VideoCapture(0)
         self.pasta_destino = tk.StringVar()
@@ -34,9 +35,9 @@ class AppScanner:
         self.video_label = tk.Label(root)
         self.video_label.pack(pady=5)
         
-        # 2. Pasta de Destino Fixa (Obrigatória para o fluxo contínuo)
+        # 2. Pasta de Destino Fixa
         opcoes_frame = tk.Frame(root)
-        opcoes_frame.pack(pady=10, fill=tk.X, padx=20)
+        opcoes_frame.pack(pady=5, fill=tk.X, padx=20)
         
         tk.Label(opcoes_frame, text="Salvar documentos em:", font=("Arial", 10, "bold"), fg="darkblue").pack(side=tk.LEFT)
         tk.Entry(opcoes_frame, textvariable=self.pasta_destino, state='readonly', width=40).pack(side=tk.LEFT, padx=5)
@@ -47,21 +48,21 @@ class AppScanner:
         btn_frame.pack(pady=5)
         
         self.btn_escanear = tk.Button(
-            btn_frame, text="🔍 Escanear e Salvar", command=self.acao_escanear, 
+            btn_frame, text="🔍 Escanear e Extrair Dados", command=self.acao_escanear, 
             bg="lightblue", font=("Arial", 14, "bold"), width=30, height=2
         )
         self.btn_escanear.pack(pady=5)
         
         # 4. Caixa de texto e Logs
-        tk.Label(root, text="Último Texto Extraído:").pack()
-        self.texto_extraido = tk.Text(root, height=7, width=65)
+        tk.Label(root, text="Dados Encontrados & Texto Bruto:").pack()
+        self.texto_extraido = scrolledtext.ScrolledText(root, height=8, width=70, font=("Arial", 9))
         self.texto_extraido.pack(pady=5)
 
         tk.Label(root, text="Terminal de Logs:").pack()
-        self.log_text = scrolledtext.ScrolledText(root, height=6, bg="black", fg="lightgreen", font=("Consolas", 10))
+        self.log_text = scrolledtext.ScrolledText(root, height=5, bg="black", fg="lightgreen", font=("Consolas", 10))
         self.log_text.pack(pady=5, padx=20, fill=tk.BOTH, expand=True)
         
-        self.log("Sistema iniciado. Selecione a pasta de destino para começar.")
+        self.log("Sistema iniciado com Regex. Selecione a pasta de destino para começar.")
         self.atualizar_frame()
 
     def log(self, mensagem):
@@ -94,9 +95,37 @@ class AppScanner:
         self.video_label.imgtk = imgtk
         self.video_label.configure(image=imgtk)
 
+    def extrair_dados_inteligentes(self, texto):
+        """Usa expressões regulares (regex) para caçar dados específicos no texto OCR"""
+        dados = []
+        
+        # Caçador de Datas (ex: 12/03/2024 ou 12-03-2024)
+        datas = re.findall(r'\b\d{2}[/-]\d{2}[/-]\d{4}\b', texto)
+        if datas:
+            dados.append(f"📅 Datas: {', '.join(datas)}")
+            
+        # Caçador de Valores Financeiros (ex: R$ 150,00 ou 1.200,50)
+        valores = re.findall(r'(?:R\$?\s?)?\b\d{1,3}(?:\.\d{3})*,\d{2}\b', texto)
+        if valores:
+            dados.append(f"💰 Valores em R$: {', '.join(valores)}")
+            
+        # Caçador de CPFs formatados (ex: 111.222.333-44)
+        cpfs = re.findall(r'\b\d{3}\.\d{3}\.\d{3}-\d{2}\b', texto)
+        if cpfs:
+            dados.append(f"👤 CPFs encontrados: {', '.join(cpfs)}")
+            
+        # Caçador de E-mails
+        emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', texto)
+        if emails:
+            dados.append(f"📧 E-mails encontrados: {', '.join(emails)}")
+
+        # Formata o retorno para a interface
+        if dados:
+            return "--- DADOS IDENTIFICADOS ---\n" + "\n".join(dados) + "\n\n--- TEXTO ORIGINAL ---\n" + texto
+        else:
+            return "--- NENHUM DADO ESTRUTURADO IDENTIFICADO ---\n\n--- TEXTO ORIGINAL ---\n" + texto
+
     def atualizar_frame(self):
-        # BUG FIX 1.4.1: Mantém o loop sempre vivo! 
-        # Apenas pula a leitura da câmera se estiver ocupado com a animação ou exibindo o resultado.
         if self.animando or self.exibindo_recorte:
             self.root.after(50, self.atualizar_frame)
             return
@@ -129,7 +158,6 @@ class AppScanner:
             frame_visual = cv2.resize(frame, (480, 360))
             self.exibir_imagem_interface(frame_visual)
             
-        # O loop do OpenCV se reinicia a cada 15ms ininterruptamente
         self.root.after(15, self.atualizar_frame)
 
     def acao_escanear(self):
@@ -142,7 +170,7 @@ class AppScanner:
             self.log("ERRO: Nenhum papel detectado na câmera.")
             return messagebox.showwarning("Aviso", "Aguarde o contorno verde aparecer no documento.")
         
-        self.btn_escanear.config(state=tk.DISABLED, bg="lightgray", text="⏳ Processando...")
+        self.btn_escanear.config(state=tk.DISABLED, bg="lightgray", text="⏳ Extraindo Inteligência...")
         self.iniciar_animacao_scan()
 
     def iniciar_animacao_scan(self):
@@ -205,26 +233,30 @@ class AppScanner:
             self.root.after(20, self.executar_animacao)
 
     def realizar_ocr_e_salvar(self):
-        self.log("Lendo texto (OCR)...")
+        self.log("Lendo texto e aplicando Regex (Filtros de Extração)...")
         self.root.update()
         
         cinza = cv2.cvtColor(self.frame_escaneado, cv2.COLOR_BGR2GRAY)
         _, binarizada = cv2.threshold(cinza, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         
         try:
-            texto = pytesseract.image_to_string(binarizada, lang='por')
+            texto_bruto = pytesseract.image_to_string(binarizada, lang='por').strip()
+            
+            # --- NOVA FUNCIONALIDADE: Filtra e Formata o Texto com Regex ---
+            texto_final_formatado = self.extrair_dados_inteligentes(texto_bruto)
+            
             self.texto_extraido.delete(1.0, tk.END)
-            self.texto_extraido.insert(tk.END, texto)
+            self.texto_extraido.insert(tk.END, texto_final_formatado)
             
             nome_base = f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             caminho_txt = os.path.join(self.pasta_destino.get(), f"{nome_base}.txt")
             caminho_img = os.path.join(self.pasta_destino.get(), f"{nome_base}.png")
             
             with open(caminho_txt, 'w', encoding='utf-8') as f:
-                f.write(texto.strip())
+                f.write(texto_final_formatado)
             cv2.imwrite(caminho_img, self.frame_escaneado)
             
-            self.log(f"💾 Sucesso! {nome_base} (.txt e .png) salvos.")
+            self.log(f"💾 Sucesso! {nome_base} (.txt e .png) salvos com dados estruturados.")
             self.log("Retornando à câmera em 2 segundos...")
             
             self.root.after(2000, self.voltar_camera)
@@ -234,11 +266,9 @@ class AppScanner:
             self.voltar_camera()
 
     def voltar_camera(self):
-        # Como o atualizar_frame continuou rodando no fundo (em modo de espera),
-        # basta alterar as flags para False e a câmera "acordará" instantaneamente.
         self.exibindo_recorte = False
         self.documento_atual = None
-        self.btn_escanear.config(state=tk.NORMAL, bg="lightblue", text="🔍 Escanear e Salvar")
+        self.btn_escanear.config(state=tk.NORMAL, bg="lightblue", text="🔍 Escanear e Extrair Dados")
         self.log("📸 Câmera pronta para o próximo scan!")
 
 if __name__ == "__main__":
