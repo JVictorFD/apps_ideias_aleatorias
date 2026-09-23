@@ -14,7 +14,7 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 class AppScanner:
     def __init__(self, root):
         self.root = root
-        self.root.title("Scanner OCR - v1.2.0 (Smart Auto-Crop)")
+        self.root.title("Scanner OCR - v1.3.0 (Animated Smart Crop)")
         self.root.geometry("700x850") 
         
         self.cap = cv2.VideoCapture(0)
@@ -24,6 +24,12 @@ class AppScanner:
         self.documento_atual = None
         self.frame_escaneado = None 
         self.exibindo_recorte = False
+        
+        # Estados da Animação
+        self.animando = False
+        self.fase_animacao = 0
+        self.linha_scan_y = 0
+        self.frame_congelado_anim = None
         
         # 1. Área do vídeo 
         self.video_label = tk.Label(root)
@@ -35,7 +41,7 @@ class AppScanner:
         
         self.auto_save_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
-            opcoes_frame, text="Exportação Automática (Salvar pasta fixa)", 
+            opcoes_frame, text="Exportação Automática (Salvar em pasta fixa)", 
             variable=self.auto_save_var, font=("Arial", 10, "bold"), fg="darkblue",
             command=self.verificar_auto_save
         ).pack(anchor=tk.W)
@@ -45,7 +51,7 @@ class AppScanner:
         tk.Entry(self.dir_frame, textvariable=self.pasta_destino, state='readonly', width=45).pack(side=tk.LEFT, padx=5)
         tk.Button(self.dir_frame, text="Procurar Pasta", command=self.escolher_pasta).pack(side=tk.LEFT)
         
-        # 3. Painel de Ações Principal (Apenas 2 botões)
+        # 3. Painel de Ações Principal
         btn_frame = tk.Frame(root)
         btn_frame.pack(pady=10)
         
@@ -74,7 +80,6 @@ class AppScanner:
         self.root.update()        
 
     def verificar_auto_save(self):
-        """Mostra a escolha de pasta apenas se o auto-save for marcado"""
         if self.auto_save_var.get():
             self.dir_frame.pack(fill=tk.X, pady=5)
             if not self.pasta_destino.get():
@@ -102,62 +107,81 @@ class AppScanner:
         nova_ordem[3] = pontos[np.argmax(diff)]
         return nova_ordem
 
-    def atualizar_frame(self):
-        if not self.exibindo_recorte:
-            ret, frame = self.cap.read()
-            if ret:
-                cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                desfoque = cv2.GaussianBlur(cinza, (5, 5), 0)
-                bordas = cv2.Canny(desfoque, 30, 150)
-                
-                kernel = np.ones((5, 5), np.uint8)
-                bordas = cv2.dilate(bordas, kernel, iterations=1)
-                bordas = cv2.erode(bordas, kernel, iterations=1)
-                
-                contornos, _ = cv2.findContours(bordas, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-                contornos = sorted(contornos, key=cv2.contourArea, reverse=True)[:5]
-                
-                self.documento_atual = None
-                
-                for contorno in contornos:
-                    if cv2.contourArea(contorno) > 15000: 
-                        perimetro = cv2.arcLength(contorno, True)
-                        aproximacao = cv2.approxPolyDP(contorno, 0.04 * perimetro, True)
-                        
-                        if len(aproximacao) == 4:
-                            self.documento_atual = aproximacao
-                            cv2.drawContours(frame, [aproximacao], -1, (0, 255, 0), 2)
-                            break
+    def exibir_imagem_interface(self, frame_bgr):
+        """Função auxiliar para renderizar qualquer frame na interface do Tkinter"""
+        cv_img = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(cv_img)
+        imgtk = ImageTk.PhotoImage(image=img)
+        self.video_label.imgtk = imgtk
+        self.video_label.configure(image=imgtk)
 
-                frame_visual = cv2.resize(frame, (480, 360))
-                cv_img = cv2.cvtColor(frame_visual, cv2.COLOR_BGR2RGB)
-                img = Image.fromarray(cv_img)
-                imgtk = ImageTk.PhotoImage(image=img)
-                
-                self.video_label.imgtk = imgtk
-                self.video_label.configure(image=imgtk)
-                
+    def atualizar_frame(self):
+        # 1. Se estiver animando, o loop normal da câmera é interrompido
+        if self.animando:
+            self.executar_animacao()
+            return
+
+        # 2. Se já escaneou e está exibindo o resultado estático
+        if self.exibindo_recorte:
+            self.root.after(50, self.atualizar_frame)
+            return
+
+        # 3. Comportamento padrão: Câmera ao vivo buscando documentos
+        ret, frame = self.cap.read()
+        if ret:
+            cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            desfoque = cv2.GaussianBlur(cinza, (5, 5), 0)
+            bordas = cv2.Canny(desfoque, 30, 150)
+            
+            kernel = np.ones((5, 5), np.uint8)
+            bordas = cv2.dilate(bordas, kernel, iterations=1)
+            bordas = cv2.erode(bordas, kernel, iterations=1)
+            
+            contornos, _ = cv2.findContours(bordas, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            contornos = sorted(contornos, key=cv2.contourArea, reverse=True)[:5]
+            
+            self.documento_atual = None
+            
+            for contorno in contornos:
+                if cv2.contourArea(contorno) > 15000: 
+                    perimetro = cv2.arcLength(contorno, True)
+                    aproximacao = cv2.approxPolyDP(contorno, 0.04 * perimetro, True)
+                    
+                    if len(aproximacao) == 4:
+                        self.documento_atual = aproximacao
+                        cv2.drawContours(frame, [aproximacao], -1, (0, 255, 0), 2)
+                        break
+
+            frame_visual = cv2.resize(frame, (480, 360))
+            self.exibir_imagem_interface(frame_visual)
+            
         self.root.after(15, self.atualizar_frame)
 
     def acao_escanear(self):
-        """Alterna inteligentemente entre Escanear (Auto-Crop) e Voltar para a Câmera"""
-        if self.exibindo_recorte:
+        if self.exibindo_recorte or self.animando:
+            # Reseta tudo para nova captura
+            self.animando = False
             self.exibindo_recorte = False
             self.documento_atual = None
             self.btn_escanear.config(text="🔍 Escanear Documento", bg="lightblue")
+            self.btn_escanear.config(state=tk.NORMAL)
             self.texto_extraido.delete(1.0, tk.END)
             self.log("Retornando para a câmera ao vivo...")
         else:
             if self.documento_atual is None:
-                self.log("ERRO: Nenhum papel detectado. Aguarde o contorno verde.")
-                return messagebox.showwarning("Aviso", "Aguarde a detecção verde aparecer antes de escanear.")
-            self.realizar_recorte_e_ocr()
+                self.log("ERRO: Nenhum papel detectado.")
+                return messagebox.showwarning("Aviso", "Aguarde a detecção verde aparecer.")
+            
+            # Trava o botão para não clicar duas vezes durante a animação
+            self.btn_escanear.config(state=tk.DISABLED)
+            self.iniciar_animacao_scan()
 
-    def realizar_recorte_e_ocr(self):
-        self.log("Iniciando auto-crop, zoom e correção de perspectiva...")
+    def iniciar_animacao_scan(self):
+        self.log("Enquadrando e aplicando crop...")
         ret, frame_original = self.cap.read()
         if not ret: return
         
+        # Calcula o recorte matematicamente
         pontos_doc = self.ordenar_pontos(self.documento_atual)
         (tl, tr, br, bl) = pontos_doc
         
@@ -171,31 +195,68 @@ class AppScanner:
         
         pontos_destino = np.array([[0, 0], [max_largura - 1, 0], [max_largura - 1, max_altura - 1], [0, max_altura - 1]], dtype="float32")
         matriz = cv2.getPerspectiveTransform(pontos_doc, pontos_destino)
-        documento_recortado = cv2.warpPerspective(frame_original, matriz, (max_largura, max_altura))
-        self.frame_escaneado = documento_recortado.copy()
         
-        # Aplica o Zoom Visual na Interface
-        h_rec, w_rec = documento_recortado.shape[:2]
+        # Salva o frame em alta resolução na memória para o OCR depois
+        self.frame_escaneado = cv2.warpPerspective(frame_original, matriz, (max_largura, max_altura))
+        
+        # Prepara a imagem de exibição (Zoom visual para a tela 480x360)
+        h_rec, w_rec = self.frame_escaneado.shape[:2]
         proporcao = min(480 / w_rec, 360 / h_rec)
         novo_w, novo_h = int(w_rec * proporcao), int(h_rec * proporcao)
-        frame_zoom = cv2.resize(documento_recortado, (novo_w, novo_h))
+        frame_zoom = cv2.resize(self.frame_escaneado, (novo_w, novo_h))
         
         fundo = np.zeros((360, 480, 3), dtype=np.uint8)
         y_off, x_off = (360 - novo_h) // 2, (480 - novo_w) // 2
         fundo[y_off:y_off+novo_h, x_off:x_off+novo_w] = frame_zoom
         
-        cv_img_recorte = cv2.cvtColor(fundo, cv2.COLOR_BGR2RGB)
-        imgtk_recorte = ImageTk.PhotoImage(image=Image.fromarray(cv_img_recorte))
-        self.video_label.imgtk = imgtk_recorte
-        self.video_label.configure(image=imgtk_recorte)
+        self.frame_congelado_anim = fundo
         
-        self.exibindo_recorte = True
-        self.btn_escanear.config(text="🔄 Nova Captura", bg="lightyellow")
+        # Configura as variáveis iniciais do "Laser"
+        self.animando = True
+        self.fase_animacao = y_off # A linha começa no topo do documento desenhado
+        self.linha_scan_y = novo_h # A linha vai descer toda a altura do documento
         
-        cinza = cv2.cvtColor(documento_recortado, cv2.COLOR_BGR2GRAY)
-        _, binarizada = cv2.threshold(cinza, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-        self.log("Lendo texto com OCR...")
+        self.executar_animacao()
+
+    def executar_animacao(self):
+        # Cria uma cópia do frame congelado para desenhar o laser por cima
+        frame_animado = self.frame_congelado_anim.copy()
+        y_atual = self.fase_animacao
+        
+        # Desenha a linha verde brilhante simulando o escâner
+        cv2.line(frame_animado, (0, y_atual), (480, y_atual), (0, 255, 0), 3)
+        
+        # Efeito visual de "sombra" ou brilho translúcido acima da linha
+        overlay = frame_animado.copy()
+        cv2.rectangle(overlay, (0, 0), (480, y_atual), (0, 50, 0), -1)
+        frame_animado = cv2.addWeighted(overlay, 0.3, frame_animado, 0.7, 0)
+        
+        self.exibir_imagem_interface(frame_animado)
+        
+        # Aumenta a velocidade de descida da linha
+        self.fase_animacao += 15 
+        
+        # Se a linha chegou no fim do documento, encerra a animação e aciona o OCR
+        if self.fase_animacao >= (360 - (360 - self.linha_scan_y) // 2):
+            self.animando = False
+            self.exibindo_recorte = True
+            
+            # Mostra o recorte limpo (sem a linha verde)
+            self.exibir_imagem_interface(self.frame_congelado_anim)
+            self.btn_escanear.config(text="🔄 Nova Captura", bg="lightyellow", state=tk.NORMAL)
+            
+            # Inicia o OCR
+            self.realizar_ocr()
+        else:
+            # Continua o loop de animação rapidamente (20ms)
+            self.root.after(20, self.executar_animacao)
+
+    def realizar_ocr(self):
+        self.log("Análise visual concluída. Executando OCR...")
         self.root.update()
+        
+        cinza = cv2.cvtColor(self.frame_escaneado, cv2.COLOR_BGR2GRAY)
+        _, binarizada = cv2.threshold(cinza, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         
         try:
             texto = pytesseract.image_to_string(binarizada, lang='por')
