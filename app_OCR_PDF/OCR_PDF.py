@@ -14,8 +14,8 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 class AppScanner:
     def __init__(self, root):
         self.root = root
-        self.root.title("Scanner OCR - V1 (Crop Interativo)")
-        self.root.geometry("750x900") 
+        self.root.title("Scanner OCR - V1 (Crop Interativo & Zoom)")
+        self.root.geometry("750x950") 
         
         self.cap = cv2.VideoCapture(0)
         self.pasta_destino = tk.StringVar()
@@ -25,8 +25,11 @@ class AppScanner:
         self.frame_escaneado = None 
         self.frame_alta_resolucao = None
         
-        # Variáveis para o Modo Ajuste
+        # Controle de Interface
         self.modo_ajuste = False
+        self.exibindo_recorte = False
+        
+        # Variáveis do Ajuste Manual
         self.frame_congelado = None
         self.pontos_visuais = None
         self.indice_arrastado = None
@@ -57,14 +60,18 @@ class AppScanner:
         tk.Entry(dir_frame, textvariable=self.pasta_destino, state='readonly', width=45).pack(side=tk.LEFT, padx=5)
         tk.Button(dir_frame, text="Procurar Pasta", command=self.escolher_pasta).pack(side=tk.LEFT)
         
-        # 3. Painel de botões principais reformulado
-        btn_frame = tk.Frame(root)
-        btn_frame.pack(pady=5)
+        # 3. Painel de botões principais (Dividido em duas linhas para não poluir a tela)
+        btn_frame_1 = tk.Frame(root)
+        btn_frame_1.pack(pady=5)
         
-        tk.Button(btn_frame, text="1. Congelar & Ajustar", command=self.ativar_ajuste, bg="lightyellow", height=2).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="2. Recortar & Ler (OCR)", command=self.escanear, bg="lightblue", height=2).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="3. Exportar TXT", command=lambda: self.exportar("txt"), height=2).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="4. Exportar DOCX", command=lambda: self.exportar("docx"), height=2).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame_1, text="1. Congelar & Ajustar", command=self.ativar_ajuste, bg="lightyellow", height=2).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame_1, text="2. Recortar & Ampliar", command=self.escanear, bg="lightblue", height=2).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame_1, text="3. Voltar p/ Câmera", command=self.voltar_camera, bg="lightgray", height=2).pack(side=tk.LEFT, padx=5)
+        
+        btn_frame_2 = tk.Frame(root)
+        btn_frame_2.pack(pady=5)
+        tk.Button(btn_frame_2, text="Exportar TXT", command=lambda: self.exportar("txt"), width=20).pack(side=tk.LEFT, padx=10)
+        tk.Button(btn_frame_2, text="Exportar DOCX", command=lambda: self.exportar("docx"), width=20).pack(side=tk.LEFT, padx=10)
         
         # 4. Caixa de texto e Logs
         tk.Label(root, text="Texto Extraído:").pack()
@@ -72,7 +79,7 @@ class AppScanner:
         self.texto_extraido.pack(pady=5)
 
         tk.Label(root, text="Terminal de Logs:").pack()
-        self.log_text = scrolledtext.ScrolledText(root, height=7, bg="black", fg="lightgreen", font=("Consolas", 10))
+        self.log_text = scrolledtext.ScrolledText(root, height=6, bg="black", fg="lightgreen", font=("Consolas", 10))
         self.log_text.pack(pady=5, padx=20, fill=tk.BOTH, expand=True)
         
         self.log("Sistema iniciado. Enquadre o documento e clique em 'Congelar & Ajustar'.")
@@ -84,6 +91,14 @@ class AppScanner:
         self.log_text.see(tk.END) 
         self.root.update()        
         
+    def voltar_camera(self):
+        """Limpa o estado de visualização estática e volta a ler o hardware da câmera"""
+        self.exibindo_recorte = False
+        self.modo_ajuste = False
+        self.documento_atual = None
+        self.texto_extraido.delete(1.0, tk.END)
+        self.log("Retornando para a câmera ao vivo...")
+
     def ordenar_pontos(self, pontos):
         pontos = pontos.reshape((4, 2))
         nova_ordem = np.zeros((4, 2), dtype=np.float32)
@@ -100,7 +115,6 @@ class AppScanner:
         if not self.modo_ajuste or self.pontos_visuais is None:
             return
             
-        # Verifica qual vértice está mais próximo do clique do mouse
         raio_clique = 30 
         for i, ponto in enumerate(self.pontos_visuais):
             distancia = math.hypot(event.x - ponto[0], event.y - ponto[1])
@@ -110,7 +124,6 @@ class AppScanner:
 
     def arrastar(self, event):
         if self.modo_ajuste and self.indice_arrastado is not None:
-            # Limita o arraste para não sair da tela de 480x360
             x = max(0, min(event.x, 480))
             y = max(0, min(event.y, 360))
             self.pontos_visuais[self.indice_arrastado] = [x, y]
@@ -121,10 +134,11 @@ class AppScanner:
 
     def ativar_ajuste(self):
         if self.documento_atual is None:
-            self.log("Nenhum papel detectado para ajustar. Tente novamente.")
+            self.log("Nenhum papel detectado. Aguarde o quadrado verde aparecer.")
             return messagebox.showwarning("Aviso", "Aguarde a detecção verde aparecer antes de ajustar.")
             
         self.modo_ajuste = True
+        self.exibindo_recorte = False
         ret, frame = self.cap.read()
         if ret:
             self.frame_alta_resolucao = frame.copy()
@@ -134,17 +148,15 @@ class AppScanner:
             self.fator_escala_x = w_orig / 480
             self.fator_escala_y = h_orig / 360
             
-            # Mapeia os pontos originais para o tamanho reduzido da interface
             pontos = self.ordenar_pontos(self.documento_atual)
             self.pontos_visuais = []
             for p in pontos:
                 self.pontos_visuais.append([int(p[0] / self.fator_escala_x), int(p[1] / self.fator_escala_y)])
                 
-            self.log("⏱️ Imagem congelada! Arraste as bolinhas azuis para ajustar os cantos.")
+            self.log("⏱️ Imagem congelada! Arraste os círculos azuis para ajustar.")
             self.renderizar_frame_ajuste()
 
     def renderizar_frame_ajuste(self):
-        """Desenha a imagem congelada com os controladores manuais de vértices"""
         frame_desenho = self.frame_congelado.copy()
         
         pts = np.array(self.pontos_visuais, np.int32).reshape((-1, 1, 2))
@@ -161,7 +173,8 @@ class AppScanner:
         self.video_label.configure(image=imgtk)
 
     def atualizar_frame(self):
-        if not self.modo_ajuste:
+        # A câmera ao vivo SÓ desenha se não estivermos ajustando vértices ou exibindo o recorte final
+        if not self.modo_ajuste and not self.exibindo_recorte:
             ret, frame = self.cap.read()
             if ret:
                 cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -208,9 +221,8 @@ class AppScanner:
             self.log("ERRO: É necessário congelar a imagem primeiro.")
             return messagebox.showwarning("Aviso", "Clique em 'Congelar & Ajustar' antes de recortar.")
             
-        self.log("Iniciando recorte com pontos manuais...")
+        self.log("Recortando e extraindo imagem corrigida...")
         
-        # Mapeia os pontos da interface de volta para a alta resolução do sensor
         pontos_reais = []
         for p in self.pontos_visuais:
             pontos_reais.append([p[0] * self.fator_escala_x, p[1] * self.fator_escala_y])
@@ -237,22 +249,44 @@ class AppScanner:
         documento_recortado = cv2.warpPerspective(self.frame_alta_resolucao, matriz, (max_largura, max_altura))
         self.frame_escaneado = documento_recortado.copy()
         
+        # --- NOVO: Exibe o documento recortado na tela (Efeito de Zoom Automático) ---
+        # Calcula a proporção para caber perfeitamente no quadro de 480x360 da interface
+        h_rec, w_rec = documento_recortado.shape[:2]
+        proporcao = min(480 / w_rec, 360 / h_rec)
+        novo_w, novo_h = int(w_rec * proporcao), int(h_rec * proporcao)
+        frame_zoom = cv2.resize(documento_recortado, (novo_w, novo_h))
+        
+        # Fundo preto para preencher as bordas que sobrarem
+        fundo = np.zeros((360, 480, 3), dtype=np.uint8)
+        y_offset = (360 - novo_h) // 2
+        x_offset = (480 - novo_w) // 2
+        fundo[y_offset:y_offset+novo_h, x_offset:x_offset+novo_w] = frame_zoom
+        
+        cv_img_recorte = cv2.cvtColor(fundo, cv2.COLOR_BGR2RGB)
+        img_recorte = Image.fromarray(cv_img_recorte)
+        imgtk_recorte = ImageTk.PhotoImage(image=img_recorte)
+        self.video_label.imgtk = imgtk_recorte
+        self.video_label.configure(image=imgtk_recorte)
+        
+        # Altera os estados para manter a imagem do recorte na tela e parar o ajuste
+        self.exibindo_recorte = True
+        self.modo_ajuste = False
+        
+        # --- FIM NOVO ---
+
         cinza = cv2.cvtColor(documento_recortado, cv2.COLOR_BGR2GRAY)
         _, binarizada = cv2.threshold(cinza, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-        self.log("Filtro aplicado. Extraindo texto...")
+        self.log("Filtro aplicado. Extraindo texto (aguarde)...")
+        self.root.update()
         
         try:
             texto = pytesseract.image_to_string(binarizada, lang='por')
-            self.log("📝 Escaneado! Câmera liberada.") 
+            self.log("📝 Escaneamento Concluído! Visualize a imagem e valide o texto.") 
             self.texto_extraido.delete(1.0, tk.END)
             self.texto_extraido.insert(tk.END, texto)
-            
-            # Retorna a câmera para o feed ao vivo
-            self.modo_ajuste = False
-            self.documento_atual = None
         except Exception as e:
             self.log(f"ERRO OCR: {e}")
-            self.modo_ajuste = False
+            self.voltar_camera()
 
     def exportar(self, formato):
         texto = self.texto_extraido.get(1.0, tk.END).strip()
