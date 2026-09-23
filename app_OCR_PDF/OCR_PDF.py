@@ -1,11 +1,12 @@
 import cv2
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import filedialog, messagebox, ttk, scrolledtext
 from PIL import Image, ImageTk
 import pytesseract
 import os
 import numpy as np
 import re
+import sqlite3
 from datetime import datetime
 
 # Aponte para o executável do Tesseract no seu sistema
@@ -14,11 +15,14 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 class AppScanner:
     def __init__(self, root):
         self.root = root
-        self.root.title("Scanner OCR - v1.5.0 (Smart Regex Extractor)")
-        self.root.geometry("700x880") 
+        self.root.title("Scanner OCR - v1.6.0 (SQLite History & Regex)")
+        self.root.geometry("800x900") 
         
         self.cap = cv2.VideoCapture(0)
         self.pasta_destino = tk.StringVar()
+        
+        # Inicializa o Banco de Dados Local
+        self.inicializar_banco()
         
         # Estados da aplicação
         self.documento_atual = None
@@ -35,35 +39,51 @@ class AppScanner:
         self.video_label = tk.Label(root)
         self.video_label.pack(pady=5)
         
-        # 2. Pasta de Destino Fixa
+        # 2. Pasta de Destino Fixa e Botão de Histórico
         opcoes_frame = tk.Frame(root)
         opcoes_frame.pack(pady=5, fill=tk.X, padx=20)
         
-        tk.Label(opcoes_frame, text="Salvar documentos em:", font=("Arial", 10, "bold"), fg="darkblue").pack(side=tk.LEFT)
-        tk.Entry(opcoes_frame, textvariable=self.pasta_destino, state='readonly', width=40).pack(side=tk.LEFT, padx=5)
-        tk.Button(opcoes_frame, text="Procurar Pasta", command=self.escolher_pasta).pack(side=tk.LEFT)
+        tk.Label(opcoes_frame, text="Pasta:", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
+        tk.Entry(opcoes_frame, textvariable=self.pasta_destino, state='readonly', width=32).pack(side=tk.LEFT, padx=5)
+        tk.Button(opcoes_frame, text="Procurar", command=self.escolher_pasta).pack(side=tk.LEFT, padx=2)
+        tk.Button(opcoes_frame, text="📊 Ver Histórico", command=self.abrir_janela_historico, bg="lightyellow", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=10)
         
         # 3. Painel de Ação
         btn_frame = tk.Frame(root)
         btn_frame.pack(pady=5)
         
         self.btn_escanear = tk.Button(
-            btn_frame, text="🔍 Escanear e Extrair Dados", command=self.acao_escanear, 
-            bg="lightblue", font=("Arial", 14, "bold"), width=30, height=2
+            btn_frame, text="🔍 Escanear, Salvar & Registrar", command=self.acao_escanear, 
+            bg="lightblue", font=("Arial", 12, "bold"), width=35, height=2
         )
-        self.btn_escanear.pack(pady=5)
+        self.btn_escanear.pack(pady=2)
         
         # 4. Caixa de texto e Logs
-        tk.Label(root, text="Dados Encontrados & Texto Bruto:").pack()
-        self.texto_extraido = scrolledtext.ScrolledText(root, height=8, width=70, font=("Arial", 9))
-        self.texto_extraido.pack(pady=5)
+        tk.Label(root, text="Dados Extraídos (Regex + Texto Bruto):").pack()
+        self.texto_extraido = scrolledtext.ScrolledText(root, height=7, width=75, font=("Arial", 9))
+        self.texto_extraido.pack(pady=2)
 
         tk.Label(root, text="Terminal de Logs:").pack()
-        self.log_text = scrolledtext.ScrolledText(root, height=5, bg="black", fg="lightgreen", font=("Consolas", 10))
-        self.log_text.pack(pady=5, padx=20, fill=tk.BOTH, expand=True)
+        self.log_text = scrolledtext.ScrolledText(root, height=5, bg="black", fg="lightgreen", font=("Consolas", 9))
+        self.log_text.pack(pady=2, padx=20, fill=tk.BOTH, expand=True)
         
-        self.log("Sistema iniciado com Regex. Selecione a pasta de destino para começar.")
+        self.log("Sistema v1.6.0 iniciado com SQLite e Regex. Selecione a pasta de destino.")
         self.atualizar_frame()
+
+    def inicializar_banco(self):
+        """Cria o banco de dados e a tabela de histórico se não existirem"""
+        self.conexao = sqlite3.connect("scanner_historico.db")
+        self.cursor = self.conexao.cursor()
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS historico (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                data_hora TEXT,
+                caminho_arquivo TEXT,
+                resumo_dados TEXT,
+                texto_completo TEXT
+            )
+        """)
+        self.conexao.commit()
 
     def log(self, mensagem):
         hora = datetime.now().strftime("%H:%M:%S")
@@ -96,34 +116,24 @@ class AppScanner:
         self.video_label.configure(image=imgtk)
 
     def extrair_dados_inteligentes(self, texto):
-        """Usa expressões regulares (regex) para caçar dados específicos no texto OCR"""
         dados = []
-        
-        # Caçador de Datas (ex: 12/03/2024 ou 12-03-2024)
         datas = re.findall(r'\b\d{2}[/-]\d{2}[/-]\d{4}\b', texto)
-        if datas:
-            dados.append(f"📅 Datas: {', '.join(datas)}")
+        if datas: dados.append(f"📅 Datas: {', '.join(datas)}")
             
-        # Caçador de Valores Financeiros (ex: R$ 150,00 ou 1.200,50)
         valores = re.findall(r'(?:R\$?\s?)?\b\d{1,3}(?:\.\d{3})*,\d{2}\b', texto)
-        if valores:
-            dados.append(f"💰 Valores em R$: {', '.join(valores)}")
+        if valores: dados.append(f"💰 Valores: {', '.join(valores)}")
             
-        # Caçador de CPFs formatados (ex: 111.222.333-44)
         cpfs = re.findall(r'\b\d{3}\.\d{3}\.\d{3}-\d{2}\b', texto)
-        if cpfs:
-            dados.append(f"👤 CPFs encontrados: {', '.join(cpfs)}")
-            
-        # Caçador de E-mails
-        emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', texto)
-        if emails:
-            dados.append(f"📧 E-mails encontrados: {', '.join(emails)}")
+        if cpfs: dados.append(f"👤 CPFs: {', '.join(cpfs)}")
 
-        # Formata o retorno para a interface
+        resumo_str = " | ".join(dados) if dados else "Nenhum dado estruturado"
+        
         if dados:
-            return "--- DADOS IDENTIFICADOS ---\n" + "\n".join(dados) + "\n\n--- TEXTO ORIGINAL ---\n" + texto
+            formatado = "--- DADOS IDENTIFICADOS (REGEX) ---\n" + "\n".join(dados) + "\n\n--- TEXTO ORIGINAL ---\n" + texto
         else:
-            return "--- NENHUM DADO ESTRUTURADO IDENTIFICADO ---\n\n--- TEXTO ORIGINAL ---\n" + texto
+            formatado = "--- NENHUM DADO ESTRUTURADO IDENTIFICADO ---\n\n--- TEXTO ORIGINAL ---\n" + texto
+            
+        return formatado, resumo_str
 
     def atualizar_frame(self):
         if self.animando or self.exibindo_recorte:
@@ -164,17 +174,16 @@ class AppScanner:
         if not self.pasta_destino.get():
             self.escolher_pasta()
             if not self.pasta_destino.get():
-                return messagebox.showwarning("Aviso", "Selecione uma pasta para salvar os arquivos automaticamente.")
+                return messagebox.showwarning("Aviso", "Selecione uma pasta de destino.")
 
         if self.documento_atual is None:
             self.log("ERRO: Nenhum papel detectado na câmera.")
-            return messagebox.showwarning("Aviso", "Aguarde o contorno verde aparecer no documento.")
+            return messagebox.showwarning("Aviso", "Aguarde o contorno verde aparecer.")
         
-        self.btn_escanear.config(state=tk.DISABLED, bg="lightgray", text="⏳ Extraindo Inteligência...")
+        self.btn_escanear.config(state=tk.DISABLED, bg="lightgray", text="⏳ Processando & Salvando...")
         self.iniciar_animacao_scan()
 
     def iniciar_animacao_scan(self):
-        self.log("Capturando e alinhando perspectiva...")
         ret, frame_original = self.cap.read()
         if not ret: return
         
@@ -204,7 +213,6 @@ class AppScanner:
         fundo[y_off:y_off+novo_h, x_off:x_off+novo_w] = frame_zoom
         
         self.frame_congelado_anim = fundo
-        
         self.animando = True
         self.fase_animacao = y_off
         self.linha_scan_y = novo_h 
@@ -226,14 +234,13 @@ class AppScanner:
         if self.fase_animacao >= (360 - (360 - self.linha_scan_y) // 2):
             self.animando = False
             self.exibindo_recorte = True
-            
             self.exibir_imagem_interface(self.frame_congelado_anim)
-            self.realizar_ocr_e_salvar()
+            self.realizar_ocr_e_salvar_bd()
         else:
             self.root.after(20, self.executar_animacao)
 
-    def realizar_ocr_e_salvar(self):
-        self.log("Lendo texto e aplicando Regex (Filtros de Extração)...")
+    def realizar_ocr_e_salvar_bd(self):
+        self.log("Lendo OCR e registrando no Banco de Dados...")
         self.root.update()
         
         cinza = cv2.cvtColor(self.frame_escaneado, cv2.COLOR_BGR2GRAY)
@@ -241,34 +248,72 @@ class AppScanner:
         
         try:
             texto_bruto = pytesseract.image_to_string(binarizada, lang='por').strip()
-            
-            # --- NOVA FUNCIONALIDADE: Filtra e Formata o Texto com Regex ---
-            texto_final_formatado = self.extrair_dados_inteligentes(texto_bruto)
+            texto_formatado, resumo_regex = self.extrair_dados_inteligentes(texto_bruto)
             
             self.texto_extraido.delete(1.0, tk.END)
-            self.texto_extraido.insert(tk.END, texto_final_formatado)
+            self.texto_extraido.insert(tk.END, texto_formatado)
             
-            nome_base = f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            # Salva arquivos físicos
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            nome_base = f"scan_{timestamp}"
             caminho_txt = os.path.join(self.pasta_destino.get(), f"{nome_base}.txt")
             caminho_img = os.path.join(self.pasta_destino.get(), f"{nome_base}.png")
             
             with open(caminho_txt, 'w', encoding='utf-8') as f:
-                f.write(texto_final_formatado)
+                f.write(texto_formatado)
             cv2.imwrite(caminho_img, self.frame_escaneado)
             
-            self.log(f"💾 Sucesso! {nome_base} (.txt e .png) salvos com dados estruturados.")
-            self.log("Retornando à câmera em 2 segundos...")
+            # Salva no Banco de Dados SQLite
+            data_hora_atual = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+            self.cursor.execute(
+                "INSERT INTO historico (data_hora, caminho_arquivo, resumo_dados, texto_completo) VALUES (?, ?, ?, ?)",
+                (data_hora_atual, caminho_txt, resumo_regex, texto_formatado)
+            )
+            self.conexao.commit()
             
+            self.log(f"💾 Salvo no disco e registrado no SQLite com sucesso!")
+            self.log("Retornando à câmera em 2 segundos...")
             self.root.after(2000, self.voltar_camera)
             
         except Exception as e:
-            self.log(f"ERRO OCR: {e}")
+            self.log(f"ERRO: {e}")
             self.voltar_camera()
+
+    def abrir_janela_historico(self):
+        """Abre uma nova janela moderna para consultar o histórico do SQLite"""
+        janela_hist = tk.Toplevel(self.root)
+        janela_hist.title("Histórico de Scans (SQLite)")
+        janela_hist.geometry("750x450")
+        
+        tk.Label(janela_hist, text="Registros Salvos no Banco de Dados Local", font=("Arial", 12, "bold")).pack(pady=10)
+        
+        # Tabela Treeview
+        colunas = ("ID", "Data/Hora", "Resumo Regex", "Arquivo")
+        tabela = ttk.Treeview(janela_hist, columns=colunas, show="headings", height=15)
+        
+        tabela.heading("ID", text="ID")
+        tabela.heading("Data/Hora", text="Data/Hora")
+        tabela.heading("Resumo Regex", text="Resumo Regex")
+        tabela.heading("Arquivo", text="Caminho do Arquivo")
+        
+        tabela.column("ID", width=40, anchor=tk.CENTER)
+        tabela.column("Data/Hora", width=130, anchor=tk.CENTER)
+        tabela.column("Resumo Regex", width=280, anchor=tk.W)
+        tabela.column("Arquivo", width=250, anchor=tk.W)
+        tabela.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        # Carrega dados do SQLite
+        self.cursor.execute("SELECT id, data_hora, resumo_dados, caminho_arquivo FROM historico ORDER BY id DESC")
+        registros = self.cursor.fetchall()
+        for reg in registros:
+            tabela.insert("", tk.END, values=reg)
+            
+        tk.Button(janela_hist, text="Fechar", command=janela_hist.destroy, width=15, bg="lightgray").pack(pady=10)
 
     def voltar_camera(self):
         self.exibindo_recorte = False
         self.documento_atual = None
-        self.btn_escanear.config(state=tk.NORMAL, bg="lightblue", text="🔍 Escanear e Extrair Dados")
+        self.btn_escanear.config(state=tk.NORMAL, bg="lightblue", text="🔍 Escanear, Salvar & Registrar")
         self.log("📸 Câmera pronta para o próximo scan!")
 
 if __name__ == "__main__":
