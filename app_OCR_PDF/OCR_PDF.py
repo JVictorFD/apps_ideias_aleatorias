@@ -55,7 +55,7 @@ class AppScanner:
         self.texto_extraido = tk.Text(root, height=8, width=65)
         self.texto_extraido.pack(pady=5)
 
-        # 5. Terminal de Logs (Com correção de expand=True)
+        # 5. Terminal de Logs
         tk.Label(root, text="Terminal de Logs:").pack()
         self.log_text = scrolledtext.ScrolledText(root, height=7, bg="black", fg="lightgreen", font=("Consolas", 10))
         self.log_text.pack(pady=5, padx=20, fill=tk.BOTH, expand=True)
@@ -73,7 +73,26 @@ class AppScanner:
     def atualizar_frame(self):
         ret, frame = self.cap.read()
         if ret:
-            # CORREÇÃO: Reduz o feed de vídeo na tela para não "empurrar" o log para fora da janela
+            # --- DETECÇÃO DO DOCUMENTO (EFEITO CAMSCANNER) ---
+            cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            desfoque = cv2.GaussianBlur(cinza, (5, 5), 0)
+            bordas = cv2.Canny(desfoque, 75, 200)
+            
+            contornos, _ = cv2.findContours(bordas, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            contornos = sorted(contornos, key=cv2.contourArea, reverse=True)[:5]
+            
+            for contorno in contornos:
+                perimetro = cv2.arcLength(contorno, True)
+                aproximacao = cv2.approxPolyDP(contorno, 0.02 * perimetro, True)
+                
+                if len(aproximacao) == 4:
+                    cv2.drawContours(frame, [aproximacao], -1, (0, 255, 0), 2)
+                    for ponto in aproximacao:
+                        x, y = ponto[0]
+                        cv2.circle(frame, (x, y), 8, (0, 255, 0), -1) 
+                    break
+
+            # --- REDIMENSIONAMENTO VISUAL ---
             frame_visual = cv2.resize(frame, (480, 360))
             cv_img = cv2.cvtColor(frame_visual, cv2.COLOR_BGR2RGB)
             
@@ -93,12 +112,12 @@ class AppScanner:
 
     def escanear(self):
         self.log("Iniciando captura de imagem...")
+        # Captura um frame novo, limpo e sem os desenhos verdes do CamScanner para o OCR ler
         ret, frame = self.cap.read()
         if not ret:
             self.log("ERRO: Falha ao ler a câmera.")
             return messagebox.showerror("Erro", "Falha na webcam.")
             
-        # O frame_escaneado mantém a alta resolução original (sem o resize visual)
         self.frame_escaneado = frame.copy()
         
         cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
