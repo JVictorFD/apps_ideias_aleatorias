@@ -15,8 +15,8 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 class AppScanner:
     def __init__(self, root):
         self.root = root
-        self.root.title("Scanner OCR - v1.7.2 (Full Image PDF)")
-        self.root.geometry("800x950") 
+        self.root.title("Scanner OCR - v1.8.0 (Pro Features & Multi-PDF)")
+        self.root.geometry("850x980") 
         
         self.cap = cv2.VideoCapture(0)
         self.pasta_destino = tk.StringVar()
@@ -28,6 +28,7 @@ class AppScanner:
         self.documento_atual = None
         self.frame_escaneado = None 
         self.exibindo_recorte = False
+        self.paginas_pdf_acumuladas = [] # Lista para acumular páginas do PDF multipágina
         
         # Estados da Animação
         self.animando = False
@@ -44,31 +45,35 @@ class AppScanner:
         opcoes_frame.pack(pady=5, fill=tk.X, padx=20)
         
         tk.Label(opcoes_frame, text="Pasta:", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
-        tk.Entry(opcoes_frame, textvariable=self.pasta_destino, state='readonly', width=30).pack(side=tk.LEFT, padx=5)
+        tk.Entry(opcoes_frame, textvariable=self.pasta_destino, state='readonly', width=28).pack(side=tk.LEFT, padx=5)
         tk.Button(opcoes_frame, text="Procurar", command=self.escolher_pasta).pack(side=tk.LEFT, padx=2)
-        tk.Button(opcoes_frame, text="📊 Histórico", command=self.abrir_janela_historico, bg="lightyellow", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=5)
-        tk.Button(opcoes_frame, text="📄 Gerar PDF (Full Image)", command=self.gerar_pdf_manual, bg="lightgreen", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=2)
+        tk.Button(opcoes_frame, text="📊 Histórico", command=self.abrir_janela_historico, bg="lightyellow", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=4)
+        tk.Button(opcoes_frame, text="📚 Finalizar PDF Único", command=self.finalizar_pdf_multipagina, bg="lightgreen", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=4)
         
         # 3. Painel de Ação Principal
         btn_frame = tk.Frame(root)
         btn_frame.pack(pady=5)
         
         self.btn_escanear = tk.Button(
-            btn_frame, text="🔍 Escanear, Salvar & Registrar", command=self.acao_escanear, 
-            bg="lightblue", font=("Arial", 12, "bold"), width=35, height=2
+            btn_frame, text="🔍 Escanear & Salvar [Espaço/Enter]", command=self.acao_escanear, 
+            bg="lightblue", font=("Arial", 12, "bold"), width=42, height=2
         )
         self.btn_escanear.pack(pady=2)
         
+        # Vincula atalhos de teclado globais (Espaço e Enter)
+        self.root.bind("<space>", lambda event: self.acao_escanear())
+        self.root.bind("<Return>", lambda event: self.acao_escanear())
+        
         # 4. Caixa de texto e Logs
         tk.Label(root, text="Dados Extraídos (Regex + Texto Bruto):").pack()
-        self.texto_extraido = scrolledtext.ScrolledText(root, height=7, width=75, font=("Arial", 9))
+        self.texto_extraido = scrolledtext.ScrolledText(root, height=6, width=78, font=("Arial", 9))
         self.texto_extraido.pack(pady=2)
 
         tk.Label(root, text="Terminal de Logs:").pack()
         self.log_text = scrolledtext.ScrolledText(root, height=5, bg="black", fg="lightgreen", font=("Consolas", 9))
         self.log_text.pack(pady=2, padx=20, fill=tk.BOTH, expand=True)
         
-        self.log("Sistema v1.7.2 iniciado. Selecione a pasta de destino para começar.")
+        self.log("Sistema v1.8.0 iniciado. Use [Espaço] ou [Enter] para escanear rapidamente.")
         self.atualizar_frame()
 
     def inicializar_banco(self):
@@ -134,6 +139,13 @@ class AppScanner:
             formatado = "--- NENHUM DADO ESTRUTURADO IDENTIFICADO ---\n\n--- TEXTO ORIGINAL ---\n" + texto
             
         return formatado, resumo_str
+
+    def aplicar_filtro_profissional(self, frame_bgr):
+        """Aplica limiarização adaptativa para remover sombras e deixar o fundo branco profissional"""
+        cinza = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        # Limiarização Otsu para realçar o texto e limpar o fundo
+        _, limiarizada = cv2.threshold(cinza, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return cv2.cvtColor(limiarizada, cv2.COLOR_GRAY2BGR)
 
     def atualizar_frame(self):
         if self.animando or self.exibindo_recorte:
@@ -201,7 +213,10 @@ class AppScanner:
         pontos_destino = np.array([[0, 0], [max_largura - 1, 0], [max_largura - 1, max_altura - 1], [0, max_altura - 1]], dtype="float32")
         matriz = cv2.getPerspectiveTransform(pontos_doc, pontos_destino)
         
-        self.frame_escaneado = cv2.warpPerspective(frame_original, matriz, (max_largura, max_altura))
+        frame_recortado_bruto = cv2.warpPerspective(frame_original, matriz, (max_largura, max_altura))
+        
+        # Aplica o Filtro Profissional (Limiarização Otsu)
+        self.frame_escaneado = self.aplicar_filtro_profissional(frame_recortado_bruto)
         
         h_rec, w_rec = self.frame_escaneado.shape[:2]
         proporcao = min(480 / w_rec, 360 / h_rec)
@@ -239,25 +254,13 @@ class AppScanner:
         else:
             self.root.after(20, self.executar_animacao)
 
-    def criar_arquivo_pdf(self, caminho_pdf, imagem_cv):
-        """Gera um PDF nativo cobrindo a página inteira com a imagem recortada"""
-        img_rgb = cv2.cvtColor(imagem_cv, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(img_rgb)
-        
-        if pil_img.mode != "RGB":
-            pil_img = pil_img.convert("RGB")
-            
-        pil_img.save(caminho_pdf, "PDF", resolution=150.0)
-
     def realizar_ocr_e_salvar_bd(self):
-        self.log("Lendo OCR, registrando no Banco de Dados e gerando PDF...")
+        self.log("Lendo OCR otimizado, salvando arquivos e acumulando página...")
         self.root.update()
         
-        cinza = cv2.cvtColor(self.frame_escaneado, cv2.COLOR_BGR2GRAY)
-        _, binarizada = cv2.threshold(cinza, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-        
         try:
-            texto_bruto = pytesseract.image_to_string(binarizada, lang='por').strip()
+            # Como a imagem já está limpa pelo filtro profissional, mandamos direto para o OCR
+            texto_bruto = pytesseract.image_to_string(self.frame_escaneado, lang='por').strip()
             texto_formatado, resumo_regex = self.extrair_dados_inteligentes(texto_bruto)
             
             self.texto_extraido.delete(1.0, tk.END)
@@ -269,23 +272,24 @@ class AppScanner:
             
             caminho_txt = os.path.join(pasta, f"{nome_base}.txt")
             caminho_img = os.path.join(pasta, f"{nome_base}.png")
-            caminho_pdf = os.path.join(pasta, f"{nome_base}.pdf")
             
-            # Salva arquivos físicos (TXT, PNG e PDF preenchido com a imagem)
             with open(caminho_txt, 'w', encoding='utf-8') as f:
                 f.write(texto_formatado)
             cv2.imwrite(caminho_img, self.frame_escaneado)
-            self.criar_arquivo_pdf(caminho_pdf, self.frame_escaneado)
             
-            # Salva no Banco de Dados SQLite
+            # Adiciona a página atual na lista para o PDF Multipágina
+            img_rgb = cv2.cvtColor(self.frame_escaneado, cv2.COLOR_BGR2RGB)
+            self.paginas_pdf_acumuladas.append(Image.fromarray(img_rgb).convert("RGB"))
+            
+            # Registra no SQLite
             data_hora_atual = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
             self.cursor.execute(
                 "INSERT INTO historico (data_hora, caminho_arquivo, resumo_dados, texto_completo) VALUES (?, ?, ?, ?)",
-                (data_hora_atual, caminho_pdf, resumo_regex, texto_formatado)
+                (data_hora_atual, caminho_txt, resumo_regex, texto_formatado)
             )
             self.conexao.commit()
             
-            self.log(f"💾 Sucesso! TXT, PNG e PDF gerados e salvos.")
+            self.log(f"💾 Página processada e acumulada na pilha de PDF!")
             self.log("Retornando à câmera em 2 segundos...")
             self.root.after(2000, self.voltar_camera)
             
@@ -293,58 +297,91 @@ class AppScanner:
             self.log(f"ERRO: {e}")
             self.voltar_camera()
 
-    def gerar_pdf_manual(self):
-        """Gera um PDF manual com a imagem em tela cheia"""
-        if self.frame_escaneado is None:
-            return messagebox.showwarning("Aviso", "Nenhuma imagem escaneada recentemente na memória.")
+    def finalizar_pdf_multipagina(self):
+        """Consolida todas as páginas escaneadas em um único PDF multipágina"""
+        if not self.paginas_pdf_acumuladas:
+            return messagebox.showwarning("Aviso", "Nenhuma página foi escaneada nesta sessão ainda.")
             
         pasta = self.pasta_destino.get()
         if not pasta:
-            pasta = filedialog.askdirectory(title="Selecione onde salvar o PDF")
+            pasta = filedialog.askdirectory(title="Selecione onde salvar o PDF unificado")
             if not pasta: return
             self.pasta_destino.set(pasta)
             
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        caminho_pdf = os.path.join(pasta, f"manual_scan_{timestamp}.pdf")
+        caminho_pdf = os.path.join(pasta, f"documento_completo_{timestamp}.pdf")
         
         try:
-            self.criar_arquivo_pdf(caminho_pdf, self.frame_escaneado)
-            self.log(f"📄 PDF manual gerado em: {caminho_pdf}")
-            messagebox.showinfo("Sucesso", f"PDF gerado com sucesso!\n{caminho_pdf}")
+            primeira_pagina = self.paginas_pdf_acumuladas[0]
+            demais_paginas = self.paginas_pdf_acumuladas[1:]
+            
+            primeira_pagina.save(
+                caminho_pdf, "PDF", resolution=150.0, save_all=True, append_images=demais_paginas
+            )
+            self.log(f"📚 PDF Multipágina gerado com sucesso: {caminho_pdf}")
+            messagebox.showinfo("Sucesso", f"PDF unificado gerado com {len(self.paginas_pdf_acumuladas)} página(s)!\n{caminho_pdf}")
+            
+            # Limpa a pilha após salvar
+            self.paginas_pdf_acumuladas = []
         except Exception as e:
-            messagebox.showerror("Erro", f"Falha ao gerar PDF: {e}")
+            messagebox.showerror("Erro", f"Falha ao gerar PDF multipágina: {e}")
 
     def abrir_janela_historico(self):
+        """Abre a janela de histórico com suporte a filtro de busca em tempo real"""
         janela_hist = tk.Toplevel(self.root)
-        janela_hist.title("Histórico de Scans (SQLite)")
-        janela_hist.geometry("750x450")
+        janela_hist.title("Histórico de Scans (SQLite com Filtro)")
+        janela_hist.geometry("800x500")
         
-        tk.Label(janela_hist, text="Registros Salvos no Banco de Dados Local", font=("Arial", 12, "bold")).pack(pady=10)
+        tk.Label(janela_hist, text="Consultar Banco de Dados Local", font=("Arial", 12, "bold")).pack(pady=5)
         
-        colunas = ("ID", "Data/Hora", "Resumo Regex", "Arquivo PDF")
+        # Barra de Pesquisa em Tempo Real
+        busca_frame = tk.Frame(janela_hist)
+        busca_frame.pack(fill=tk.X, padx=10, pady=5)
+        tk.Label(busca_frame, text="🔍 Filtrar (Data, CPF ou Valor):").pack(side=tk.LEFT)
+        
+        entrada_busca = tk.Entry(busca_frame, width=40)
+        entrada_busca.pack(side=tk.LEFT, padx=5)
+        
+        # Tabela Treeview
+        colunas = ("ID", "Data/Hora", "Resumo Regex", "Arquivo TXT")
         tabela = ttk.Treeview(janela_hist, columns=colunas, show="headings", height=15)
         
         tabela.heading("ID", text="ID")
         tabela.heading("Data/Hora", text="Data/Hora")
         tabela.heading("Resumo Regex", text="Resumo Regex")
-        tabela.heading("Arquivo PDF", text="Caminho do PDF")
+        tabela.heading("Arquivo TXT", text="Caminho do Arquivo")
         
         tabela.column("ID", width=40, anchor=tk.CENTER)
         tabela.column("Data/Hora", width=130, anchor=tk.CENTER)
-        tabela.column("Resumo Regex", width=250, anchor=tk.W)
-        tabela.column("Arquivo PDF", width=280, anchor=tk.W)
+        tabela.column("Resumo Regex", width=270, anchor=tk.W)
+        tabela.column("Arquivo TXT", width=280, anchor=tk.W)
         tabela.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        self.cursor.execute("SELECT id, data_hora, resumo_dados, caminho_arquivo FROM historico ORDER BY id DESC")
-        for reg in self.cursor.fetchall():
-            tabela.insert("", tk.END, values=reg)
+        def carregar_dados(filtro=""):
+            for row in tabela.get_children():
+                tabela.delete(row)
             
+            if filtro:
+                query = "SELECT id, data_hora, resumo_dados, caminho_arquivo FROM historico WHERE resumo_dados LIKE ? OR texto_completo LIKE ? ORDER BY id DESC"
+                self.cursor.execute(query, (f"%{filtro}%", f"%{filtro}%"))
+            else:
+                self.cursor.execute("SELECT id, data_hora, resumo_dados, caminho_arquivo FROM historico ORDER BY id DESC")
+                
+            for reg in self.cursor.fetchall():
+                tabela.insert("", tk.END, values=reg)
+
+        # Vincula a digitação na barra de busca para atualizar a tabela instantaneamente
+        entrada_busca.bind("<KeyRelease>", lambda event: carregar_dados(entrada_busca.get()))
+        
+        # Carrega todos inicialmente
+        carregar_dados()
+        
         tk.Button(janela_hist, text="Fechar", command=janela_hist.destroy, width=15, bg="lightgray").pack(pady=10)
 
     def voltar_camera(self):
         self.exibindo_recorte = False
         self.documento_atual = None
-        self.btn_escanear.config(state=tk.NORMAL, bg="lightblue", text="🔍 Escanear, Salvar & Registrar")
+        self.btn_escanear.config(state=tk.NORMAL, bg="lightblue", text="🔍 Escanear & Salvar [Espaço/Enter]")
         self.log("📸 Câmera pronta para o próximo scan!")
 
 if __name__ == "__main__":
