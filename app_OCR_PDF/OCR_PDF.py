@@ -3,7 +3,6 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 from PIL import Image, ImageTk
 import pytesseract
-from docx import Document
 import os
 import numpy as np
 from datetime import datetime
@@ -14,7 +13,7 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 class AppScanner:
     def __init__(self, root):
         self.root = root
-        self.root.title("Scanner OCR - v1.3.0 (Animated Smart Crop)")
+        self.root.title("Scanner OCR - v1.4.1 (Continuous Scan Fix)")
         self.root.geometry("700x850") 
         
         self.cap = cv2.VideoCapture(0)
@@ -35,42 +34,34 @@ class AppScanner:
         self.video_label = tk.Label(root)
         self.video_label.pack(pady=5)
         
-        # 2. Configurações de Exportação (Minimalista)
+        # 2. Pasta de Destino Fixa (Obrigatória para o fluxo contínuo)
         opcoes_frame = tk.Frame(root)
-        opcoes_frame.pack(pady=5, fill=tk.X, padx=20)
+        opcoes_frame.pack(pady=10, fill=tk.X, padx=20)
         
-        self.auto_save_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            opcoes_frame, text="Exportação Automática (Salvar em pasta fixa)", 
-            variable=self.auto_save_var, font=("Arial", 10, "bold"), fg="darkblue",
-            command=self.verificar_auto_save
-        ).pack(anchor=tk.W)
+        tk.Label(opcoes_frame, text="Salvar documentos em:", font=("Arial", 10, "bold"), fg="darkblue").pack(side=tk.LEFT)
+        tk.Entry(opcoes_frame, textvariable=self.pasta_destino, state='readonly', width=40).pack(side=tk.LEFT, padx=5)
+        tk.Button(opcoes_frame, text="Procurar Pasta", command=self.escolher_pasta).pack(side=tk.LEFT)
         
-        self.dir_frame = tk.Frame(opcoes_frame)
-        tk.Label(self.dir_frame, text="Salvar em:").pack(side=tk.LEFT)
-        tk.Entry(self.dir_frame, textvariable=self.pasta_destino, state='readonly', width=45).pack(side=tk.LEFT, padx=5)
-        tk.Button(self.dir_frame, text="Procurar Pasta", command=self.escolher_pasta).pack(side=tk.LEFT)
-        
-        # 3. Painel de Ações Principal
+        # 3. Painel de Ação
         btn_frame = tk.Frame(root)
-        btn_frame.pack(pady=10)
+        btn_frame.pack(pady=5)
         
-        self.btn_escanear = tk.Button(btn_frame, text="🔍 Escanear Documento", command=self.acao_escanear, bg="lightblue", font=("Arial", 11, "bold"), width=25, height=2)
-        self.btn_escanear.pack(side=tk.LEFT, padx=10)
-        
-        self.btn_exportar = tk.Button(btn_frame, text="💾 Exportar Arquivo", command=self.exportar, bg="lightgray", font=("Arial", 11, "bold"), width=25, height=2)
-        self.btn_exportar.pack(side=tk.LEFT, padx=10)
+        self.btn_escanear = tk.Button(
+            btn_frame, text="🔍 Escanear e Salvar", command=self.acao_escanear, 
+            bg="lightblue", font=("Arial", 14, "bold"), width=30, height=2
+        )
+        self.btn_escanear.pack(pady=5)
         
         # 4. Caixa de texto e Logs
-        tk.Label(root, text="Texto Extraído:").pack()
-        self.texto_extraido = tk.Text(root, height=8, width=65)
+        tk.Label(root, text="Último Texto Extraído:").pack()
+        self.texto_extraido = tk.Text(root, height=7, width=65)
         self.texto_extraido.pack(pady=5)
 
         tk.Label(root, text="Terminal de Logs:").pack()
         self.log_text = scrolledtext.ScrolledText(root, height=6, bg="black", fg="lightgreen", font=("Consolas", 10))
         self.log_text.pack(pady=5, padx=20, fill=tk.BOTH, expand=True)
         
-        self.log("Sistema iniciado. Enquadre o papel no quadrado verde e clique em Escanear.")
+        self.log("Sistema iniciado. Selecione a pasta de destino para começar.")
         self.atualizar_frame()
 
     def log(self, mensagem):
@@ -79,22 +70,11 @@ class AppScanner:
         self.log_text.see(tk.END) 
         self.root.update()        
 
-    def verificar_auto_save(self):
-        if self.auto_save_var.get():
-            self.dir_frame.pack(fill=tk.X, pady=5)
-            if not self.pasta_destino.get():
-                self.escolher_pasta()
-        else:
-            self.dir_frame.pack_forget()
-
     def escolher_pasta(self):
-        pasta = filedialog.askdirectory(title="Selecione a pasta para exportação")
+        pasta = filedialog.askdirectory(title="Selecione a pasta para exportação automática")
         if pasta:
             self.pasta_destino.set(pasta)
-            self.log(f"Auto-Save ativado na pasta: {pasta}")
-        else:
-            self.auto_save_var.set(False)
-            self.dir_frame.pack_forget()
+            self.log(f"Pasta configurada: {pasta}")
 
     def ordenar_pontos(self, pontos):
         pontos = pontos.reshape((4, 2))
@@ -108,7 +88,6 @@ class AppScanner:
         return nova_ordem
 
     def exibir_imagem_interface(self, frame_bgr):
-        """Função auxiliar para renderizar qualquer frame na interface do Tkinter"""
         cv_img = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(cv_img)
         imgtk = ImageTk.PhotoImage(image=img)
@@ -116,17 +95,12 @@ class AppScanner:
         self.video_label.configure(image=imgtk)
 
     def atualizar_frame(self):
-        # 1. Se estiver animando, o loop normal da câmera é interrompido
-        if self.animando:
-            self.executar_animacao()
-            return
-
-        # 2. Se já escaneou e está exibindo o resultado estático
-        if self.exibindo_recorte:
+        # BUG FIX 1.4.1: Mantém o loop sempre vivo! 
+        # Apenas pula a leitura da câmera se estiver ocupado com a animação ou exibindo o resultado.
+        if self.animando or self.exibindo_recorte:
             self.root.after(50, self.atualizar_frame)
             return
 
-        # 3. Comportamento padrão: Câmera ao vivo buscando documentos
         ret, frame = self.cap.read()
         if ret:
             cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -155,33 +129,27 @@ class AppScanner:
             frame_visual = cv2.resize(frame, (480, 360))
             self.exibir_imagem_interface(frame_visual)
             
+        # O loop do OpenCV se reinicia a cada 15ms ininterruptamente
         self.root.after(15, self.atualizar_frame)
 
     def acao_escanear(self):
-        if self.exibindo_recorte or self.animando:
-            # Reseta tudo para nova captura
-            self.animando = False
-            self.exibindo_recorte = False
-            self.documento_atual = None
-            self.btn_escanear.config(text="🔍 Escanear Documento", bg="lightblue")
-            self.btn_escanear.config(state=tk.NORMAL)
-            self.texto_extraido.delete(1.0, tk.END)
-            self.log("Retornando para a câmera ao vivo...")
-        else:
-            if self.documento_atual is None:
-                self.log("ERRO: Nenhum papel detectado.")
-                return messagebox.showwarning("Aviso", "Aguarde a detecção verde aparecer.")
-            
-            # Trava o botão para não clicar duas vezes durante a animação
-            self.btn_escanear.config(state=tk.DISABLED)
-            self.iniciar_animacao_scan()
+        if not self.pasta_destino.get():
+            self.escolher_pasta()
+            if not self.pasta_destino.get():
+                return messagebox.showwarning("Aviso", "Selecione uma pasta para salvar os arquivos automaticamente.")
+
+        if self.documento_atual is None:
+            self.log("ERRO: Nenhum papel detectado na câmera.")
+            return messagebox.showwarning("Aviso", "Aguarde o contorno verde aparecer no documento.")
+        
+        self.btn_escanear.config(state=tk.DISABLED, bg="lightgray", text="⏳ Processando...")
+        self.iniciar_animacao_scan()
 
     def iniciar_animacao_scan(self):
-        self.log("Enquadrando e aplicando crop...")
+        self.log("Capturando e alinhando perspectiva...")
         ret, frame_original = self.cap.read()
         if not ret: return
         
-        # Calcula o recorte matematicamente
         pontos_doc = self.ordenar_pontos(self.documento_atual)
         (tl, tr, br, bl) = pontos_doc
         
@@ -196,10 +164,8 @@ class AppScanner:
         pontos_destino = np.array([[0, 0], [max_largura - 1, 0], [max_largura - 1, max_altura - 1], [0, max_altura - 1]], dtype="float32")
         matriz = cv2.getPerspectiveTransform(pontos_doc, pontos_destino)
         
-        # Salva o frame em alta resolução na memória para o OCR depois
         self.frame_escaneado = cv2.warpPerspective(frame_original, matriz, (max_largura, max_altura))
         
-        # Prepara a imagem de exibição (Zoom visual para a tela 480x360)
         h_rec, w_rec = self.frame_escaneado.shape[:2]
         proporcao = min(480 / w_rec, 360 / h_rec)
         novo_w, novo_h = int(w_rec * proporcao), int(h_rec * proporcao)
@@ -211,48 +177,35 @@ class AppScanner:
         
         self.frame_congelado_anim = fundo
         
-        # Configura as variáveis iniciais do "Laser"
         self.animando = True
-        self.fase_animacao = y_off # A linha começa no topo do documento desenhado
-        self.linha_scan_y = novo_h # A linha vai descer toda a altura do documento
+        self.fase_animacao = y_off
+        self.linha_scan_y = novo_h 
         
         self.executar_animacao()
 
     def executar_animacao(self):
-        # Cria uma cópia do frame congelado para desenhar o laser por cima
         frame_animado = self.frame_congelado_anim.copy()
         y_atual = self.fase_animacao
         
-        # Desenha a linha verde brilhante simulando o escâner
         cv2.line(frame_animado, (0, y_atual), (480, y_atual), (0, 255, 0), 3)
-        
-        # Efeito visual de "sombra" ou brilho translúcido acima da linha
         overlay = frame_animado.copy()
         cv2.rectangle(overlay, (0, 0), (480, y_atual), (0, 50, 0), -1)
         frame_animado = cv2.addWeighted(overlay, 0.3, frame_animado, 0.7, 0)
         
         self.exibir_imagem_interface(frame_animado)
-        
-        # Aumenta a velocidade de descida da linha
         self.fase_animacao += 15 
         
-        # Se a linha chegou no fim do documento, encerra a animação e aciona o OCR
         if self.fase_animacao >= (360 - (360 - self.linha_scan_y) // 2):
             self.animando = False
             self.exibindo_recorte = True
             
-            # Mostra o recorte limpo (sem a linha verde)
             self.exibir_imagem_interface(self.frame_congelado_anim)
-            self.btn_escanear.config(text="🔄 Nova Captura", bg="lightyellow", state=tk.NORMAL)
-            
-            # Inicia o OCR
-            self.realizar_ocr()
+            self.realizar_ocr_e_salvar()
         else:
-            # Continua o loop de animação rapidamente (20ms)
             self.root.after(20, self.executar_animacao)
 
-    def realizar_ocr(self):
-        self.log("Análise visual concluída. Executando OCR...")
+    def realizar_ocr_e_salvar(self):
+        self.log("Lendo texto (OCR)...")
         self.root.update()
         
         cinza = cv2.cvtColor(self.frame_escaneado, cv2.COLOR_BGR2GRAY)
@@ -262,47 +215,31 @@ class AppScanner:
             texto = pytesseract.image_to_string(binarizada, lang='por')
             self.texto_extraido.delete(1.0, tk.END)
             self.texto_extraido.insert(tk.END, texto)
-            self.log("📝 Pronto! Exporte o arquivo ou faça uma nova captura.") 
-        except Exception as e:
-            self.log(f"ERRO OCR: {e}")
-
-    def exportar(self):
-        texto = self.texto_extraido.get(1.0, tk.END).strip()
-        if not texto:
-            return messagebox.showwarning("Aviso", "A caixa de texto está vazia.")
             
-        nome_base = f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        if self.auto_save_var.get() and self.pasta_destino.get():
+            nome_base = f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             caminho_txt = os.path.join(self.pasta_destino.get(), f"{nome_base}.txt")
             caminho_img = os.path.join(self.pasta_destino.get(), f"{nome_base}.png")
             
             with open(caminho_txt, 'w', encoding='utf-8') as f:
-                f.write(texto)
-            if self.frame_escaneado is not None:
-                cv2.imwrite(caminho_img, self.frame_escaneado)
-                
-            self.log(f"📄 Salvo automaticamente em: {caminho_txt}")
-            messagebox.showinfo("Sucesso", "TXT e Imagem salvos automaticamente!")
-        else:
-            tipos = [("Arquivo de Texto", "*.txt"), ("Documento Word", "*.docx")]
-            caminho = filedialog.asksaveasfilename(initialfile=nome_base, defaultextension=".txt", filetypes=tipos)
-            if not caminho: return
+                f.write(texto.strip())
+            cv2.imwrite(caminho_img, self.frame_escaneado)
             
-            formato = os.path.splitext(caminho)[1]
-            if formato == '.txt':
-                with open(caminho, 'w', encoding='utf-8') as f: f.write(texto)
-            elif formato == '.docx':
-                doc = Document()
-                doc.add_paragraph(texto)
-                doc.save(caminho)
-                
-            if self.frame_escaneado is not None:
-                caminho_img = os.path.splitext(caminho)[0] + '.png'
-                cv2.imwrite(caminho_img, self.frame_escaneado)
-                
-            self.log(f"📄 Arquivo e imagem salvos em: {caminho}")
-            messagebox.showinfo("Sucesso", "Documento e Imagem salvos com sucesso!")
+            self.log(f"💾 Sucesso! {nome_base} (.txt e .png) salvos.")
+            self.log("Retornando à câmera em 2 segundos...")
+            
+            self.root.after(2000, self.voltar_camera)
+            
+        except Exception as e:
+            self.log(f"ERRO OCR: {e}")
+            self.voltar_camera()
+
+    def voltar_camera(self):
+        # Como o atualizar_frame continuou rodando no fundo (em modo de espera),
+        # basta alterar as flags para False e a câmera "acordará" instantaneamente.
+        self.exibindo_recorte = False
+        self.documento_atual = None
+        self.btn_escanear.config(state=tk.NORMAL, bg="lightblue", text="🔍 Escanear e Salvar")
+        self.log("📸 Câmera pronta para o próximo scan!")
 
 if __name__ == "__main__":
     root = tk.Tk()
