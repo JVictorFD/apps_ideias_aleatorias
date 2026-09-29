@@ -2,5 +2,6 @@
     "python.analysis.extraPaths": [
         "c:\\Users\\Admin\\.vscode\\extensions\\benpaddlejones.pico-bridge-2.3.46\\emulator\\mock\\typings",
         "c:\\Users\\Admin\\.vscode\\extensions\\benpaddlejones.pico-bridge-2.3.46\\emulator\\mock\\micropython"
-    ]
+    ],
+    "python-envs.defaultEnvManager": "ms-python.python:system"
 }

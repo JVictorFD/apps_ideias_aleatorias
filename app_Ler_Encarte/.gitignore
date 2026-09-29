@@ -1,0 +1,13 @@
+# Ambientes virtuais
+venv/
+env/
+.env
+
+# Arquivos de cache do Python
+__pycache__/
+*.pyc
+
+# Imagens de teste locais (opcional, caso queira manter o repositório leve)
+*.jpg
+*.jpeg
+*.png
