@@ -1,102 +1,69 @@
 import streamlit as st
-import pytesseract
-from PIL import Image
-import re
+import ollama
 import pandas as pd
-import os
+import json
 
-# ==========================================
-# CONFIGURAÇÃO DO TESSERACT (APENAS PARA WINDOWS)
-# Se você estiver no Linux ou Mac, pode comentar a linha abaixo.
-# Se estiver no Windows, verifique se o caminho está correto.
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-# ==========================================
+st.set_page_config(page_title="Radar de Encartes", layout="wide")
+st.title("🛒 Radar de Encartes (IA Local - 100% Grátis)")
 
-st.set_page_config(page_title="Radar de Encartes", layout="centered")
-st.title("🛒 Radar de Encartes Reais (OCR Local)")
-st.write("Faça o upload do encarte para extrair os produtos e preços usando Tesseract OCR.")
-
-def extrair_produtos_e_precos(texto_bruto):
-    """
-    Usa Expressões Regulares (Regex) para encontrar padrões de "Produto + Preço"
-    no texto extraído pela imagem.
-    """
-    linhas = texto_bruto.split('\n')
-    produtos_encontrados = []
-    
-    # Padrao regex para encontrar valores em reais (ex: 12,99 | 5.99 | R$ 10,00)
-    padrao_preco = r'(?:R\$\s*)?(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})'
-    
-    produto_atual = ""
-    
-    for linha in linhas:
-        linha = linha.strip()
-        if not linha:
-            continue
-            
-        # Tenta encontrar um preço na linha
-        match_preco = re.search(padrao_preco, linha)
-        
-        if match_preco:
-            preco_encontrado = match_preco.group(1)
-            # Remove o preço da linha para tentar isolar o nome do produto
-            nome_produto = linha.replace(match_preco.group(0), '').strip()
-            
-            # Se o nome do produto ficou na mesma linha do preço
-            if len(nome_produto) > 3:
-                produtos_encontrados.append({
-                    "Produto": nome_produto,
-                    "Preço Extraído": f"R$ {preco_encontrado}"
-                })
-            # Se a linha só tinha o preço, assume que o produto estava na linha anterior
-            elif produto_atual and len(produto_atual) > 3:
-                 produtos_encontrados.append({
-                    "Produto": produto_atual,
-                    "Preço Extraído": f"R$ {preco_encontrado}"
-                })
-            produto_atual = "" # Reseta
-        else:
-            # Se não tem preço, guarda a linha como possível nome de produto
-            # Filtra linhas muito curtas que podem ser lixo do OCR
-            if len(linha) > 3 and not re.search(r'^\d+$', linha):
-                produto_atual = linha
-                
-    return produtos_encontrados
-
-# Interface de Upload
-imagem_recebida = st.file_uploader("Selecione a imagem do encarte", type=["jpg", "png", "jpeg", "webp"])
+imagem_recebida = st.file_uploader("Selecione o encarte", type=["jpg", "png", "jpeg", "webp"])
 
 if imagem_recebida is not None:
-    # Exibir a imagem
-    imagem = Image.open(imagem_recebida)
-    st.image(imagem, caption="Encarte Carregado", use_container_width=True)
+    # Ler os bytes da imagem para enviar ao Ollama
+    image_bytes = imagem_recebida.getvalue()
     
-    if st.button("Analisar Encarte"):
-        with st.spinner("Extraindo texto da imagem com Tesseract..."):
+    st.image(image_bytes, caption="Encarte Carregado", width=500)
+    
+    if st.button("Analisar com IA Local", type="primary"):
+        with st.spinner("A IA local está analisando a imagem (isso pode levar alguns segundos dependendo do seu PC)..."):
             try:
-                # 1. Executar o OCR (forçando o idioma português se estiver instalado)
-                # Dica: se falhar o 'por', use apenas lang='eng' ou retire o parâmetro lang.
-                texto_extraido = pytesseract.image_to_string(imagem, lang='por')
+# Prompt blindado contra alucinações
+                prompt = """
+                Você é um extrator de dados estrito. Leia o texto exato desta imagem.
+                REGRA 1: NÃO INVENTE PRODUTOS. Extraia apenas o que você conseguir ler claramente.
+                REGRA 2: Se você não conseguir identificar um preço ao lado do produto, ignore o produto.
+                REGRA 3: Retorne APENAS e EXATAMENTE um array JSON válido, sem comentários.
                 
-                # 2. Processar o texto com Regex
-                dados_estruturados = extrair_produtos_e_precos(texto_extraido)
+                Exemplo de saída esperada:
+                [
+                    {"Produto": "Margarina Puro Sabor", "Quantidade": "500g", "Preço": "R$ 4,79"},
+                    {"Produto": "Arroz Tio Manoel", "Quantidade": "1kg", "Preço": "R$ 3,79"}
+                ]
+                """
                 
-                st.success("Análise Concluída!")
+                # Comunicação com o modelo rodando no seu computador
+                resposta = ollama.chat(
+                    model='llava', 
+                    messages=[{
+                        'role': 'user',
+                        'content': prompt,
+                        'images': [image_bytes]
+                    }],
+                    # options={'temperature': 0} tira a criatividade da IA e a força a ser literal
+                    options={
+                        'temperature': 0.0,
+                        'top_p': 0.1
+                    }
+                )
                 
-                if dados_estruturados:
-                    st.subheader("Produtos Identificados")
-                    df = pd.DataFrame(dados_estruturados)
-                    st.dataframe(df, use_container_width=True)
+                texto_resposta = resposta['message']['content'].strip()
+                
+                # Limpeza básica caso a IA coloque blocos de markdown
+                if texto_resposta.startswith("```json"):
+                    texto_resposta = texto_resposta[7:-3]
+                elif texto_resposta.startswith("```"):
+                    texto_resposta = texto_resposta[3:-3]
                     
-                    # Simulação de cruzamento com banco de dados
-                    st.info("💡 Próximo passo no seu algoritmo: Salvar esses dados em um banco local (SQLite) e cruzar com o histórico para encontrar as reais promoções.")
-                else:
-                    st.warning("O OCR extraiu texto, mas o algoritmo não conseguiu associar produtos e preços com clareza.")
+                # Converter para dataframe
+                dados_estruturados = json.loads(texto_resposta)
+                df = pd.DataFrame(dados_estruturados)
                 
-                # Mostrar o texto bruto para depuração (opcional, bom para você ajustar o regex depois)
-                with st.expander("Ver texto bruto extraído pelo OCR"):
-                    st.text(texto_extraido)
-                    
+                st.success("Encarte lido com sucesso!")
+                st.dataframe(df, use_container_width=True)
+                
+            except json.JSONDecodeError:
+                st.error("A IA não conseguiu formatar os dados como JSON. Veja a resposta bruta:")
+                st.write(texto_resposta)
             except Exception as e:
-                st.error(f"Erro ao processar imagem: {e}")
-                st.write("Verifique se o Tesseract está instalado corretamente na sua máquina.")
+                st.error(f"Erro ao conectar com o Ollama: {e}")
+                st.info("Verifique se o Ollama está instalado e rodando em segundo plano no seu computador.")
