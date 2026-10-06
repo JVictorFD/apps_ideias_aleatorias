@@ -9,3 +9,8 @@ Um aplicativo em Python criado com Streamlit e Tesseract OCR para ler encartes d
 3. Instale as dependências:
    ```bash
    pip install -r requirements.txt
+
+
+## Para o Biblia_maps:
+   ```bash
+   streamlit run app.py
