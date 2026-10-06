@@ -1,0 +1,62 @@
+[
+    {
+        "id": "chamado_abraao",
+        "regiao": "Mesopotâmia",
+        "subregiao": "Ur dos Caldeus",
+        "evento": "O Chamado de Abraão",
+        "personagens": "Abraão, Sara, Terá",
+        "referencia": "Gênesis 12:1-4",
+        "local_atual": "Tell el-Muqayyar, Iraque",
+        "coordenadas": [30.9634, 46.1046],
+        "testamento": "Antigo Testamento",
+        "icone": "star"
+    },
+    {
+        "id": "mar_vermelho",
+        "regiao": "Egito",
+        "subregiao": "Golfo de Suez",
+        "evento": "A Travessia do Mar Vermelho",
+        "personagens": "Moisés, Povo de Israel",
+        "referencia": "Êxodo 14:15-31",
+        "local_atual": "Golfo de Suez, Egito",
+        "coordenadas": [29.9329, 32.5516],
+        "testamento": "Antigo Testamento",
+        "icone": "tint"
+    },
+    {
+        "id": "nascimento_jesus",
+        "regiao": "Judeia",
+        "subregiao": "Belém",
+        "evento": "O Nascimento de Jesus",
+        "personagens": "Jesus, Maria, José",
+        "referencia": "Lucas 2:1-20",
+        "local_atual": "Belém, Palestina",
+        "coordenadas": [31.7054, 35.2024],
+        "testamento": "Novo Testamento",
+        "icone": "info-sign"
+    },
+    {
+        "id": "entrada_jerusalem",
+        "regiao": "Judeia",
+        "subregiao": "Jerusalém",
+        "evento": "A Entrada Triunfal",
+        "personagens": "Jesus, Multidão",
+        "referencia": "Mateus 21:1-11",
+        "local_atual": "Jerusalém, Israel",
+        "coordenadas": [31.7780, 35.2354],
+        "testamento": "Novo Testamento",
+        "icone": "leaf"
+    },
+    {
+        "id": "prisao_paulo",
+        "regiao": "Europa",
+        "subregiao": "Roma",
+        "evento": "Prisão de Paulo",
+        "personagens": "Paulo",
+        "referencia": "Atos 28:16-31",
+        "local_atual": "Roma, Itália",
+        "coordenadas": [41.9028, 12.4964],
+        "testamento": "Novo Testamento",
+        "icone": "book"
+    }
+]
