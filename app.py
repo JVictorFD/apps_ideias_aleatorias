@@ -50,9 +50,7 @@ if filtro_testamento != "Todos":
     eventos_filtrados = [e for e in eventos if e["testamento"] == filtro_testamento]
 
 # Mapa Base usando OpenStreetMap para evitar bloqueios de tela preta
-mapa_biblico = folium.Map(location=[31.7, 35.2], zoom_start=5, tiles="OpenStreetMap")
-
-# Renderização dos Marcadores
+mapa_biblico = folium.Map(location=[31.7, 35.2], zoom_start=5, tiles="OpenStreetMap")# Renderização dos Marcadores
 for evento in eventos_filtrados:
     coord = evento["coordenadas"]
     cor_marcador = "darkred" if evento["testamento"] == "Antigo Testamento" else "cadetblue"
